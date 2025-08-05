@@ -98,12 +98,14 @@ if __name__ == "__main__":
     mini_data = get_mini(URL_MINI_JSON, page_cookies)
     # print(f"Mini Crossword Data:\n{json.dumps(mini_data)}")
 
+    """
     # Validate the mini crossword data
     try:
         mini_crossword = MiniCrossword.model_validate(mini_data)
         print(f"Mini Crossword ID: {mini_crossword.id}")
     except Exception as e:
         print(f"Error validating Mini Crossword data: {e}")
+    """
 
     # Evaluate unnecessary request headers
     #evaluate_unecessary_request_headers(URL_JSON, page_cookies)
@@ -115,5 +117,8 @@ if __name__ == "__main__":
     """
 
     # Fetch the NYT connections data
-    #connections_data = get_connections(URL_CONNECTIONS_JSON)
+    connections_data = get_connections(URL_CONNECTIONS_JSON)
     #print(f"Connections Data:\n{json.dumps(connections_data, indent=4)}")
+    # Save the connections data to a file
+    with open("connections_2025-08-05.json", "w") as file:
+        json.dump(connections_data, file, indent=4)
