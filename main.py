@@ -24,7 +24,6 @@ def get_mini(url: str, cookies: dict[str, str]) -> dict:
         'accept-language': 'en-US,en;q=0.9',
         'content-type': 'application/x-www-form-urlencoded',
         'priority': 'u=1, i',
-        'referer': 'https://www.nytimes.com/crosswords/game/mini/2025/08/03',
         'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
         'sec-ch-ua-mobile': '?0',
         'sec-ch-ua-platform': '"Windows"',
@@ -69,5 +68,5 @@ if __name__ == "__main__":
     mini_data = get_mini(URL_JSON, page_cookies)
 
     # Save the crossword data to a file
-    with open("mini_crossword.json", "w") as file:
+    with open("mini_crossword_2.json", "w") as file:
         json.dump(mini_data, file, indent=4)
