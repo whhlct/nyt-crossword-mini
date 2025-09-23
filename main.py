@@ -1,8 +1,12 @@
+import aiohttp
+import asyncio
+
 import requests
 import json
 import time
 import os
-from datetime import date
+from datetime import date, timedelta
+from typing import Optional
 
 from mini_crossword import MiniCrossword
 
@@ -112,29 +116,24 @@ def evaluate_unecessary_request_headers(url: str, cookies: dict[str, str]) -> No
 
 
 ## Puzzle HTTP Request Functions
+async def fetch_data(session: aiohttp.ClientSession, url: str, headers: Optional[dict[str, str]], cookies: Optional[dict[str, str]]) -> dict:
+    async with session.get(url, headers=headers, cookies=cookies) as response:
+        response.raise_for_status()  # Raise an error for bad responses
+        return await response.json()
+
 # Connections
-def fetch_connections(date: date, cookies: dict[str, str] | None = None, headers: dict[str, str] | None = None) -> dict:
+async def fetch_connections(session: aiohttp.ClientSession, date: date, cookies: Optional[dict[str, str]] = None, headers: Optional[dict[str, str]] = None) -> dict:
     """Fetch the NYT Mini Crossword connections.
     Doesn't need cookies or headers."""
 
     url = connections_json_url(date)
 
-    response = requests.get(
-        url,
-        headers=headers,
-        cookies=cookies,
-    )
-    response.raise_for_status()  # Raise an error for bad responses
+    response = await fetch_data(session, url, headers=headers, cookies=cookies)
 
-    # Return the JSON response if needed
-    try:
-        connections_data = response.json()
-        return connections_data
-    except ValueError:
-        raise Exception("Failed to parse JSON response")
+    return response
 
 # Mini Crossword
-def fetch_mini(date: date, cookies: dict[str, str], headers: dict[str, str] | None = None) -> dict:
+async def fetch_mini(session: aiohttp.ClientSession, date: date, cookies: dict[str, str], headers: Optional[dict[str, str]] = None) -> dict:
     """Fetch the NYT Mini Crossword.
     Requires cookies from the page request.
     Request headers can be customized, otherwise defaults to HEADERS."""
@@ -144,46 +143,57 @@ def fetch_mini(date: date, cookies: dict[str, str], headers: dict[str, str] | No
     if headers is None:
         headers = HEADERS
 
-    response = requests.get(
-        url, 
-        headers=headers,
-        cookies=cookies,
-    )
-    response.raise_for_status()  # Raise an error for bad responses
+    response = await fetch_data(session, url, headers=headers, cookies=cookies)
 
-    # Return the JSON response if needed
-    try:
-        crossword_data = response.json()
-        return crossword_data
-    except ValueError:
-        raise Exception("Failed to parse JSON response")
+    return response
 
 
 ## Puzzle Fetch and Save Functions
 # Connections
-def fetch_and_save_connections(date: date, cookies: dict[str, str] | None = None, headers: dict[str, str] | None = None) -> None:
+async def fetch_and_save_connections(session: aiohttp.ClientSession, date: date, cookies: Optional[dict[str, str]] = None, headers: Optional[dict[str, str]] = None) -> None:
     """Fetch and save the connections for a given date."""
     # Fetch the connections data
-    connections_data = fetch_connections(date, cookies, headers)
+    connections_data = await fetch_connections(session, date, cookies, headers)
     print("Connections data fetched successfully.")
     # Save the connections data to a file
     saved_file_path = save_connections_json(date.strftime("%Y-%m-%d"), connections_data)
     print(f"Connections data saved to {saved_file_path}.")
 
 # Mini Crossword
-def fetch_and_save_mini(date: date, cookies: dict[str, str] | None = None) -> None:
+async def fetch_and_save_mini(session: aiohttp.ClientSession, date: date, cookies: dict[str, str] | None = None) -> None:
     """Fetch and save the mini crossword for a given date."""
     # Fetch the NYT Mini Crossword page to get cookies
     if cookies is None:
         cookies = get_mini_cookies()
     # Fetch the NYT Mini Crossword using the cookies
-    mini_data = fetch_mini(date, cookies)
+    mini_data = await fetch_mini(session, date, cookies)
     print("Mini crossword fetched successfully.")
     # Save the crossword data to a file
     saved_file_path = save_mini_json(date.strftime("%Y-%m-%d"), mini_data)
     print(f"Mini crossword saved to {saved_file_path}.")
 
 
+## Mass Fetch and Save
+# Date Range
+def date_range(start_date: date, end_date: date) -> list[date]:
+    """Generate a list of dates from start_date to end_date (inclusive)."""
+    current_date = start_date
+    dates = []
+    while current_date <= end_date:
+        dates.append(current_date)
+        current_date += timedelta(days=1)
+    return dates
+
+async def fetch_and_save_connections_range(start_date: date, end_date: date) -> None:
+    dates = date_range(start_date, end_date)
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_and_save_connections(session, d) for d in dates]
+        await asyncio.gather(*tasks)
+
+
 if __name__ == "__main__":
-    fetch_and_save_mini(date(2025, 9, 22))
-    fetch_and_save_connections(date(2025, 9, 22))
+    start_time = time.time()
+    asyncio.run(fetch_and_save_connections_range(date(2025, 9, 1), date(2025, 9, 23)))
+    end_time = time.time()
+    print(f"Total time taken: {end_time - start_time} seconds")
