@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+from tqdm.asyncio import tqdm
 
 import requests
 import json
@@ -72,10 +73,18 @@ def save_connections_json(date: str, data: dict) -> str:
     """Save connections JSON data to a file."""
     return save_json_to_file(connections_json_path(date), data)
 
+def check_connections_json(date: str) -> bool:
+    """Check if connections JSON file exists for a given date."""
+    return os.path.isfile(connections_json_path(date))
+
 # Mini JSON
 def save_mini_json(date: str, data: dict) -> str:
     """Save mini JSON data to a file."""
     return save_json_to_file(mini_json_path(date), data)
+
+def check_mini_json(date: str) -> bool:
+    """Check if mini JSON file exists for a given date."""
+    return os.path.isfile(mini_json_path(date))
 
 
 def get_page_cookies(url: str) -> dict[str, str]:
@@ -152,25 +161,35 @@ async def fetch_mini(session: aiohttp.ClientSession, date: date, cookies: dict[s
 # Connections
 async def fetch_and_save_connections(session: aiohttp.ClientSession, date: date, cookies: Optional[dict[str, str]] = None, headers: Optional[dict[str, str]] = None) -> None:
     """Fetch and save the connections for a given date."""
+    # Check if file already exists
+    if check_connections_json(date.strftime("%Y-%m-%d")):
+        return
     # Fetch the connections data
-    connections_data = await fetch_connections(session, date, cookies, headers)
-    print("Connections data fetched successfully.")
+    try:
+        connections_data = await fetch_connections(session, date, cookies, headers)
+    except aiohttp.ClientResponseError as e:
+        print(f"Failed to fetch connections for {date}: {e}")
+        return
     # Save the connections data to a file
     saved_file_path = save_connections_json(date.strftime("%Y-%m-%d"), connections_data)
-    print(f"Connections data saved to {saved_file_path}.")
 
 # Mini Crossword
 async def fetch_and_save_mini(session: aiohttp.ClientSession, date: date, cookies: dict[str, str] | None = None) -> None:
     """Fetch and save the mini crossword for a given date."""
+    # Check if file already exists
+    if check_mini_json(date.strftime("%Y-%m-%d")):
+        return
     # Fetch the NYT Mini Crossword page to get cookies
     if cookies is None:
         cookies = get_mini_cookies()
     # Fetch the NYT Mini Crossword using the cookies
-    mini_data = await fetch_mini(session, date, cookies)
-    print("Mini crossword fetched successfully.")
+    try:
+        mini_data = await fetch_mini(session, date, cookies)
+    except aiohttp.ClientResponseError as e:
+        print(f"Failed to fetch mini crossword for {date}: {e}")
+        return
     # Save the crossword data to a file
     saved_file_path = save_mini_json(date.strftime("%Y-%m-%d"), mini_data)
-    print(f"Mini crossword saved to {saved_file_path}.")
 
 
 ## Mass Fetch and Save
@@ -189,11 +208,22 @@ async def fetch_and_save_connections_range(start_date: date, end_date: date) -> 
 
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_and_save_connections(session, d) for d in dates]
-        await asyncio.gather(*tasks)
+        await tqdm.gather(*tasks)
+
+async def fetch_and_save_mini_range(start_date: date, end_date: date) -> None:
+    dates = date_range(start_date, end_date)
+
+    # Get cookies once
+    cookies = get_mini_cookies()
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_and_save_mini(session, d, cookies) for d in dates]
+        await tqdm.gather(*tasks)
 
 
 if __name__ == "__main__":
     start_time = time.time()
-    asyncio.run(fetch_and_save_connections_range(date(2025, 9, 1), date(2025, 9, 23)))
+    #asyncio.run(fetch_and_save_connections_range(date(2023, 1, 1), date(2025, 9, 23)))
+    asyncio.run(fetch_and_save_mini_range(date(2014, 1, 1), date(2014, 12, 31)))
     end_time = time.time()
     print(f"Total time taken: {end_time - start_time} seconds")
