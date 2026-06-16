@@ -6,7 +6,15 @@ Install:
     pip install textual rich
 
 Run:
+    python mini_crossword.py
+
+Or load one file directly:
     python mini_crossword.py 2026-06-16.json
+
+Puzzle menu:
+    The app scans puzzle_data/mini/*.json.
+    Each filename stem is treated as the puzzle date.
+    The menu is paginated so large puzzle collections stay responsive.
 
 Controls:
     Arrow keys       Move within the current direction
@@ -34,7 +42,8 @@ from typing import Optional
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Grid, Horizontal, Vertical
-from textual.widgets import Footer, Header, Static
+from textual.screen import Screen
+from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
 
 Direction = str  # "Across" or "Down"
@@ -227,15 +236,17 @@ class CrosswordCell(Static):
             self.update("")
             return
 
-        # Keep the rendered content to two lines. A bordered Static with
-        # height 4 has only two interior rows, so adding an extra blank line
-        # clips the guess letter in many terminals/Textual versions.
+        # Height 3 leaves three rows because cells are borderless:
+        #   row 1: clue label in the top-left
+        #   row 2: guessed letter centered
+        #   row 3: blank spacing
         label = self.cell.label[:2]
         guess = self.guess.upper() if self.guess else " "
 
         content = Text()
         content.append(f"{label:<7}\n", style="dim")
-        content.append(f"{guess:^5}", style="bold")
+        content.append(f"{guess:^7}\n", style="bold")
+        content.append(" " * 7)
         self.update(content)
 
 
@@ -285,10 +296,189 @@ class CrosswordBoard(Grid):
             )
 
 
-class MiniCrosswordApp(App):
+PUZZLE_DATA_DIR = Path("puzzle_data/mini")
+
+
+def find_puzzle_files(puzzle_dir: Path = PUZZLE_DATA_DIR) -> list[Path]:
+    """Return puzzle JSON files sorted by date-like filename, newest first."""
+    if not puzzle_dir.exists():
+        return []
+
+    return sorted(
+        puzzle_dir.glob("*.json"),
+        key=lambda path: path.stem,
+        reverse=True,
+    )
+
+
+class PuzzleMenuScreen(Screen):
+    """Start screen that lets the user choose a puzzle date.
+
+    The menu is paginated instead of rendering every puzzle file at once.
+    That keeps startup and scrolling responsive even with hundreds or
+    thousands of JSON files in puzzle_data/mini/.
+    """
+
+    PAGE_SIZE = 30
+
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+        ("right", "next_page", "Next page"),
+        ("left", "previous_page", "Previous page"),
+        ("pagedown", "next_page", "Next page"),
+        ("pageup", "previous_page", "Previous page"),
+        ("home", "first_page", "First page"),
+        ("end", "last_page", "Last page"),
+        ("r", "reload", "Reload"),
+    ]
+
+    def __init__(self, puzzle_dir: Path = PUZZLE_DATA_DIR) -> None:
+        super().__init__()
+        self.puzzle_dir = puzzle_dir
+        self.puzzle_files: list[Path] = []
+        self.page = 0
+
+    @property
+    def page_count(self) -> int:
+        if not self.puzzle_files:
+            return 1
+        return (len(self.puzzle_files) + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+
+        with Vertical(id="menu"):
+            yield Static("Mini Crossword", id="menu-title")
+            yield Static(id="menu-subtitle")
+            yield Static(id="menu-page")
+            yield ListView(id="puzzle-list")
+            yield Static(
+                "Enter selects. Right/PageDown next page. Left/PageUp previous page. "
+                "Home/End jump. R reloads.",
+                id="menu-help",
+            )
+
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.reload_puzzles()
+
+    def reload_puzzles(self) -> None:
+        self.puzzle_files = find_puzzle_files(self.puzzle_dir)
+        self.page = min(self.page, self.page_count - 1)
+        self.render_current_page()
+
+    def render_current_page(self) -> None:
+        subtitle = self.query_one("#menu-subtitle", Static)
+        page_label = self.query_one("#menu-page", Static)
+        list_view = self.query_one("#puzzle-list", ListView)
+
+        list_view.clear()
+
+        subtitle.update(f"Choose a puzzle date from {self.puzzle_dir}/")
+
+        if not self.puzzle_files:
+            page_label.update(
+                "No puzzle JSON files found. Add files like "
+                "2026-06-16.json to puzzle_data/mini/ and press R."
+            )
+            return
+
+        start = self.page * self.PAGE_SIZE
+        end = min(start + self.PAGE_SIZE, len(self.puzzle_files))
+        visible_files = self.puzzle_files[start:end]
+
+        page_label.update(
+            f"Showing {start + 1}-{end} of {len(self.puzzle_files)} "
+            f"(page {self.page + 1}/{self.page_count})"
+        )
+
+        for puzzle_path in visible_files:
+            list_view.append(ListItem(Label(puzzle_path.stem)))
+
+        if visible_files:
+            list_view.index = 0
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        selected_index = event.list_view.index
+        if selected_index is None:
+            return
+
+        puzzle_index = self.page * self.PAGE_SIZE + selected_index
+        if not (0 <= puzzle_index < len(self.puzzle_files)):
+            return
+
+        puzzle_path = self.puzzle_files[puzzle_index]
+        self.app.push_screen(GameScreen(puzzle_path))
+
+    def action_next_page(self) -> None:
+        if self.page + 1 < self.page_count:
+            self.page += 1
+            self.render_current_page()
+
+    def action_previous_page(self) -> None:
+        if self.page > 0:
+            self.page -= 1
+            self.render_current_page()
+
+    def action_first_page(self) -> None:
+        if self.page != 0:
+            self.page = 0
+            self.render_current_page()
+
+    def action_last_page(self) -> None:
+        last_page = self.page_count - 1
+        if self.page != last_page:
+            self.page = last_page
+            self.render_current_page()
+
+    def action_reload(self) -> None:
+        self.reload_puzzles()
+
+class GameScreen(Screen):
     CSS = """
     Screen {
         layout: vertical;
+    }
+
+    #menu {
+        width: 70;
+        height: 1fr;
+        margin: 2 4;
+        padding: 1 2;
+        border: round white;
+    }
+
+    #menu-title {
+        text-style: bold;
+        height: 3;
+        content-align: center middle;
+    }
+
+    #menu-subtitle {
+        height: 3;
+        content-align: center middle;
+    }
+
+    #menu-page {
+        height: 1;
+        content-align: center middle;
+    }
+
+    #menu-help {
+        height: 3;
+        content-align: center middle;
+    }
+
+    #menu-empty {
+        padding: 1;
+        border: round red;
+    }
+
+    #puzzle-list {
+        height: 1fr;
+        border: round white;
+        padding: 1;
     }
 
     #main {
@@ -315,11 +505,21 @@ class MiniCrosswordApp(App):
         margin-bottom: 1;
     }
 
-    #clues {
+    #clue-lists {
+        height: 1fr;
+    }
+
+    .clue-panel {
+        width: 1fr;
         height: 1fr;
         border: round white;
         padding: 1;
         overflow-y: auto;
+        content-align: left top;
+    }
+
+    #across-clues {
+        margin-right: 1;
     }
 
     #status {
@@ -330,6 +530,7 @@ class MiniCrosswordApp(App):
 
     BINDINGS = [
         ("q", "quit", "Quit"),
+        ("escape", "menu", "Menu"),
         ("tab", "toggle_direction", "Toggle"),
         ("space", "toggle_direction", "Toggle"),
         ("enter", "next_clue", "Next clue"),
@@ -340,7 +541,8 @@ class MiniCrosswordApp(App):
 
     def __init__(self, puzzle_path: str | Path) -> None:
         super().__init__()
-        self.puzzle = Puzzle.from_json_file(puzzle_path)
+        self.puzzle_path = Path(puzzle_path)
+        self.puzzle = Puzzle.from_json_file(self.puzzle_path)
         self.guesses = [""] * len(self.puzzle.cells)
         self.correctness: list[Optional[bool]] = [None] * len(self.puzzle.cells)
         self.selected_index = self.puzzle.first_open_cell()
@@ -354,13 +556,18 @@ class MiniCrosswordApp(App):
 
             with Vertical(id="sidebar"):
                 yield Static(id="current")
-                yield Static(id="clues")
+                with Horizontal(id="clue-lists"):
+                    yield Static(id="across-clues", classes="clue-panel")
+                    yield Static(id="down-clues", classes="clue-panel")
 
         yield Static(id="status")
         yield Footer()
 
     def on_mount(self) -> None:
-        self.refresh_ui("Type letters to solve. Use Tab/Space to switch direction.")
+        self.refresh_ui(
+            f"Loaded {self.puzzle_path.stem}. Type letters to solve. "
+            "Use Tab/Space to switch direction."
+        )
 
     def on_key(self, event) -> None:
         key = event.key
@@ -379,6 +586,14 @@ class MiniCrosswordApp(App):
             self.erase()
             event.prevent_default()
             return
+
+    def action_menu(self) -> None:
+        # If this game was opened from the menu, return to it. If the app was
+        # started with a direct file path, switch to a fresh menu.
+        if len(self.app.screen_stack) > 1:
+            self.app.pop_screen()
+        else:
+            self.app.switch_screen(PuzzleMenuScreen())
 
     def action_toggle_direction(self) -> None:
         other = "Down" if self.direction == "Across" else "Across"
@@ -562,7 +777,8 @@ class MiniCrosswordApp(App):
         )
 
         self.query_one("#current", Static).update(self.current_clue_text(clue))
-        self.query_one("#clues", Static).update(self.all_clues_text(clue))
+        self.query_one("#across-clues", Static).update(self.clues_text("Across", clue))
+        self.query_one("#down-clues", Static).update(self.clues_text("Down", clue))
         self.query_one("#status", Static).update(status or self.progress_text())
 
     def current_clue_text(self, clue: Optional[Clue]) -> Text:
@@ -579,20 +795,22 @@ class MiniCrosswordApp(App):
         text.append(f"\n\n{answer_progress}", style="bold")
         return text
 
-    def all_clues_text(self, active_clue: Optional[Clue]) -> Text:
+    def clues_text(self, direction: Direction, active_clue: Optional[Clue]) -> Text:
         text = Text()
+        text.append(direction, style="bold underline")
+        text.append("\n")
 
-        for direction in ("Across", "Down"):
-            text.append(f"{direction}\n", style="bold underline")
+        for clue in self.puzzle.clues:
+            if clue.direction != direction:
+                continue
 
-            for clue in self.puzzle.clues:
-                if clue.direction != direction:
-                    continue
+            is_active = active_clue is not None and clue.index == active_clue.index
+            label_style = "bold yellow" if is_active else "bold"
+            clue_style = "yellow" if is_active else ""
 
-                style = "bold yellow" if active_clue and clue.index == active_clue.index else ""
-                text.append(f"{clue.label}. {clue.text}\n", style=style)
-
-            text.append("\n")
+            text.append(f"{clue.label}. ", style=label_style)
+            text.append(clue.text, style=clue_style)
+            text.append("\n\n")
 
         return text
 
@@ -603,16 +821,31 @@ class MiniCrosswordApp(App):
         return (
             f"{filled}/{total} letters filled. "
             "Arrow keys move or switch direction. "
-            "F2 checks, F3 reveals, F4 clears."
+            "F2 checks, F3 reveals, F4 clears. Esc returns to puzzle menu."
         )
 
 
+class MiniCrosswordApp(App):
+    CSS = GameScreen.CSS
+
+    def __init__(self, initial_puzzle_path: str | Path | None = None) -> None:
+        super().__init__()
+        self.initial_puzzle_path = Path(initial_puzzle_path) if initial_puzzle_path else None
+
+    def on_mount(self) -> None:
+        if self.initial_puzzle_path is not None:
+            self.push_screen(GameScreen(self.initial_puzzle_path))
+        else:
+            self.push_screen(PuzzleMenuScreen())
+
+
 def main() -> None:
-    if len(sys.argv) != 2:
-        print("Usage: python mini_crossword.py path/to/puzzle.json")
+    if len(sys.argv) > 2:
+        print("Usage: python mini_crossword.py [path/to/puzzle.json]")
         raise SystemExit(2)
 
-    app = MiniCrosswordApp(sys.argv[1])
+    initial_path = sys.argv[1] if len(sys.argv) == 2 else None
+    app = MiniCrosswordApp(initial_path)
     app.run()
 
 
