@@ -13,8 +13,9 @@ from tqdm.asyncio import tqdm
 # Daily Crossword Date Range: 1993/11/21 - Present
 # Mini Crossword Date Range:  2014/08/21 - Present
 # Connections Date Range:     2023/06/12 - Present
+# Midi Crossword Date Range:  2026/02/25 - Present
 
-PUZZLE_DATA_DIR = Path("puzzle_data_test")
+PUZZLE_DATA_DIR = Path("puzzle_data")
 
 DEFAULT_HEADERS = {
     "accept": "*/*",
@@ -59,6 +60,14 @@ CROSSWORD = PuzzleConfig(
     name="daily crossword",
     directory="crossword",
     json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/daily/{date}.json",
+    requires_cookies=True,
+    default_headers=DEFAULT_HEADERS,
+)
+
+MIDI = PuzzleConfig(
+    name="midi crossword",
+    directory="midi",
+    json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/midi/{date}.json",
     requires_cookies=True,
     default_headers=DEFAULT_HEADERS,
 )
@@ -180,10 +189,10 @@ async def evaluate_unnecessary_request_headers(
 
 
 async def main() -> None:
-    await download_puzzle_range(CROSSWORD, date(2026, 6, 1), date.today())
-    await download_puzzle_range(MINI, date(2026, 6, 1), date.today())
-    await download_puzzle_range(CONNECTIONS, date(2026, 6, 1), date.today())
-
+    #await download_puzzle_range(CROSSWORD, date(2026, 6, 1), date.today())
+    #await download_puzzle_range(MINI, date(2026, 6, 1), date.today())
+    #await download_puzzle_range(CONNECTIONS, date(2026, 6, 1), date.today())
+    await download_puzzle_range(MIDI, date(2026, 2, 25), date.today())
 
 if __name__ == "__main__":
     start_time = time.perf_counter()
