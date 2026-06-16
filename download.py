@@ -1,4 +1,5 @@
 import asyncio
+import argparse
 import json
 import time
 from dataclasses import dataclass
@@ -15,7 +16,8 @@ from tqdm.asyncio import tqdm
 # Connections Date Range:     2023/06/12 - Present
 # Midi Crossword Date Range:  2026/02/25 - Present
 
-PUZZLE_DATA_DIR = Path("puzzle_data")
+PUZZLE_DATA_DIR = Path("puzzle_data_test_2")
+MAX_CONCURRENT_DOWNLOADS = 20
 
 DEFAULT_HEADERS = {
     "accept": "*/*",
@@ -29,8 +31,10 @@ DEFAULT_HEADERS = {
 class PuzzleConfig:
     """Configuration needed to fetch and store one puzzle type."""
 
+    key: str
     name: str
     directory: str
+    start_date: date
     json_url_template: str
     requires_cookies: bool = False
     default_headers: dict[str, str] | None = None
@@ -43,34 +47,45 @@ class PuzzleConfig:
 
 
 CONNECTIONS = PuzzleConfig(
+    key="connections",
     name="connections",
     directory="connections",
+    start_date=date(2023, 6, 12),
     json_url_template="https://www.nytimes.com/svc/connections/v2/{date}.json",
 )
 
 MINI = PuzzleConfig(
+    key="mini",
     name="mini crossword",
     directory="mini",
+    start_date=date(2014, 8, 21),
     json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/mini/{date}.json",
     requires_cookies=True,
     default_headers=DEFAULT_HEADERS,
 )
 
 CROSSWORD = PuzzleConfig(
+    key="crossword",
     name="daily crossword",
     directory="crossword",
+    start_date=date(1993, 11, 21),
     json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/daily/{date}.json",
     requires_cookies=True,
     default_headers=DEFAULT_HEADERS,
 )
 
 MIDI = PuzzleConfig(
+    key="midi",
     name="midi crossword",
     directory="midi",
+    start_date=date(2026, 2, 25),
     json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/midi/{date}.json",
     requires_cookies=True,
     default_headers=DEFAULT_HEADERS,
 )
+
+PUZZLE_CONFIGS = (MINI, MIDI, CROSSWORD, CONNECTIONS)
+PUZZLE_CONFIG_BY_KEY = {config.key: config for config in PUZZLE_CONFIGS}
 
 
 def mini_page_url(puzzle_date: date) -> str:
@@ -164,11 +179,74 @@ async def download_puzzle_range(
         if config.requires_cookies:
             cookies = await get_mini_cookies(session)
 
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
+        async def download_with_limit(puzzle_date: date) -> Path | None:
+            async with semaphore:
+                return await download_puzzle(session, config, puzzle_date, cookies=cookies)
+
         tasks = [
-            download_puzzle(session, config, puzzle_date, cookies=cookies)
+            download_with_limit(puzzle_date)
             for puzzle_date in iter_dates(start_date, end_date)
         ]
         await tqdm.gather(*tasks)
+
+
+def parse_date(value: str) -> date:
+    """Parse a YYYY-MM-DD date argument."""
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a valid date. Use YYYY-MM-DD."
+        ) from error
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Download NYT puzzle JSON files.",
+        usage="download.py [mini/midi/crossword/connections] [date YYYY-MM-DD]",
+    )
+    parser.add_argument(
+        "puzzle_type",
+        nargs="?",
+        choices=PUZZLE_CONFIG_BY_KEY,
+        help="Puzzle type to download. If omitted, all puzzle types are downloaded.",
+    )
+    parser.add_argument(
+        "start_date",
+        nargs="?",
+        type=parse_date,
+        help="Start date in YYYY-MM-DD format. Requires a puzzle type.",
+    )
+
+    args = parser.parse_args()
+
+    if args.start_date is not None and args.puzzle_type is None:
+        parser.error("date can only be specified after a puzzle type")
+
+    today = date.today()
+    if args.start_date is not None and args.start_date > today:
+        parser.error(f"date cannot be in the future: {args.start_date}")
+
+    if args.puzzle_type is not None and args.start_date is not None:
+        config = PUZZLE_CONFIG_BY_KEY[args.puzzle_type]
+        if args.start_date < config.start_date:
+            parser.error(
+                f"{config.name} starts on {config.start_date}; "
+                f"got {args.start_date}"
+            )
+
+    return args
+
+
+def download_plan(args: argparse.Namespace) -> list[tuple[PuzzleConfig, date]]:
+    """Return puzzle configs and start dates implied by CLI arguments."""
+    if args.puzzle_type is None:
+        return [(config, config.start_date) for config in PUZZLE_CONFIGS]
+
+    config = PUZZLE_CONFIG_BY_KEY[args.puzzle_type]
+    return [(config, args.start_date or config.start_date)]
 
 
 async def evaluate_unnecessary_request_headers(
@@ -189,10 +267,12 @@ async def evaluate_unnecessary_request_headers(
 
 
 async def main() -> None:
-    #await download_puzzle_range(CROSSWORD, date(2026, 6, 1), date.today())
-    #await download_puzzle_range(MINI, date(2026, 6, 1), date.today())
-    #await download_puzzle_range(CONNECTIONS, date(2026, 6, 1), date.today())
-    await download_puzzle_range(MIDI, date(2026, 2, 25), date.today())
+    args = parse_args()
+    end_date = date.today()
+
+    for config, start_date in download_plan(args):
+        print(f"Downloading {config.name} from {start_date} to {end_date}")
+        await download_puzzle_range(config, start_date, end_date)
 
 if __name__ == "__main__":
     start_time = time.perf_counter()
