@@ -275,6 +275,8 @@ class CrosswordBoard(Grid):
 
     CELL_WIDTH = 7
     CELL_HEIGHT = 3
+    CHROME_WIDTH = 6
+    CHROME_HEIGHT = 4
 
     def __init__(self, puzzle: Puzzle) -> None:
         super().__init__(id="board")
@@ -294,8 +296,16 @@ class CrosswordBoard(Grid):
         # Give the grid a concrete size. Some Textual versions do not
         # expand an auto-sized Grid from its children, which makes the board
         # appear blank/collapsed even though the cells exist.
-        self.styles.width = self.puzzle.width * self.CELL_WIDTH + 6
-        self.styles.height = self.puzzle.height * self.CELL_HEIGHT + 4
+        self.styles.width = self.rendered_width(self.puzzle)
+        self.styles.height = self.rendered_height(self.puzzle)
+
+    @classmethod
+    def rendered_width(cls, puzzle: Puzzle) -> int:
+        return puzzle.width * cls.CELL_WIDTH + cls.CHROME_WIDTH
+
+    @classmethod
+    def rendered_height(cls, puzzle: Puzzle) -> int:
+        return puzzle.height * cls.CELL_HEIGHT + cls.CHROME_HEIGHT
 
     def update_state(
         self,
@@ -678,10 +688,16 @@ class GameScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.fit_board_scroll_width()
         self.refresh_ui(
             f"Loaded {self.puzzle_path.stem}. Type letters to solve. "
             "Use Tab/Space to switch direction."
         )
+
+    def fit_board_scroll_width(self) -> None:
+        board_width = CrosswordBoard.rendered_width(self.puzzle)
+        if board_width <= 60:
+            self.query_one("#board-scroll", VerticalScroll).styles.width = board_width
 
     def on_key(self, event) -> None:
         key = event.key
