@@ -5,6 +5,8 @@ currently supports Mini, Midi, and Daily Crossword puzzles.
 Connections is present in the top-level menu, but its game
 screen is not implemented yet.
 
+![Mini crossword in the terminal](images/mini.png)
+
 Puzzle JSON files are stored under `puzzle_data/`, split by puzzle type:
 
 ```text
