@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Mini Crossword TUI
+Crossword TUI
 
 Install:
     pip install textual rich
 
 Run:
-    python mini_crossword.py
+    python crossword.py mini
 
 Or load one file directly:
-    python mini_crossword.py 2026-06-16.json
+    python crossword.py mini puzzle_data/mini/2026-06-16.json
 
 Puzzle menu:
-    The app scans puzzle_data/mini/*.json.
+    The app scans puzzle_data/<mini|midi|crossword>/*.json.
     Each filename stem is treated as the puzzle date.
     The menu is paginated so large puzzle collections stay responsive.
 
@@ -47,6 +47,26 @@ from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
 
 Direction = str  # "Across" or "Down"
+CrosswordPuzzleType = str  # "mini", "midi", or "crossword"
+
+PUZZLE_DATA_ROOT = Path("puzzle_data")
+CROSSWORD_PUZZLE_TYPES = ("mini", "midi", "crossword")
+CROSSWORD_PUZZLE_TITLES = {
+    "mini": "Mini Crossword",
+    "midi": "Midi Crossword",
+    "crossword": "Crossword",
+}
+
+
+def validate_crossword_puzzle_type(puzzle_type: str) -> CrosswordPuzzleType:
+    if puzzle_type not in CROSSWORD_PUZZLE_TYPES:
+        choices = ", ".join(CROSSWORD_PUZZLE_TYPES)
+        raise ValueError(f"Unknown crossword puzzle type {puzzle_type!r}. Use one of: {choices}.")
+    return puzzle_type
+
+
+def puzzle_dir_for_type(puzzle_type: str) -> Path:
+    return PUZZLE_DATA_ROOT / validate_crossword_puzzle_type(puzzle_type)
 
 
 @dataclass(frozen=True)
@@ -84,7 +104,7 @@ class Puzzle:
         with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
 
-        # The uploaded mini puzzle stores the actual puzzle in body[0].
+        # The downloaded puzzle format stores the actual puzzle in body[0].
         # This fallback also supports passing a puzzle object directly.
         data = raw["body"][0] if "body" in raw else raw
 
@@ -296,10 +316,7 @@ class CrosswordBoard(Grid):
             )
 
 
-PUZZLE_DATA_DIR = Path("puzzle_data/mini")
-
-
-def find_puzzle_files(puzzle_dir: Path = PUZZLE_DATA_DIR) -> list[Path]:
+def find_puzzle_files(puzzle_dir: Path) -> list[Path]:
     """Return puzzle JSON files sorted by date-like filename, newest first."""
     if not puzzle_dir.exists():
         return []
@@ -316,13 +333,14 @@ class PuzzleMenuScreen(Screen):
 
     The menu is paginated instead of rendering every puzzle file at once.
     That keeps startup and scrolling responsive even with hundreds or
-    thousands of JSON files in puzzle_data/mini/.
+    thousands of JSON files.
     """
 
     PAGE_SIZE = 30
 
     BINDINGS = [
         ("q", "quit", "Quit"),
+        ("escape", "back", "Back"),
         ("right", "next_page", "Next page"),
         ("left", "previous_page", "Previous page"),
         ("pagedown", "next_page", "Next page"),
@@ -332,9 +350,10 @@ class PuzzleMenuScreen(Screen):
         ("r", "reload", "Reload"),
     ]
 
-    def __init__(self, puzzle_dir: Path = PUZZLE_DATA_DIR) -> None:
+    def __init__(self, puzzle_type: str) -> None:
         super().__init__()
-        self.puzzle_dir = puzzle_dir
+        self.puzzle_type = validate_crossword_puzzle_type(puzzle_type)
+        self.puzzle_dir = puzzle_dir_for_type(self.puzzle_type)
         self.puzzle_files: list[Path] = []
         self.page = 0
 
@@ -348,7 +367,7 @@ class PuzzleMenuScreen(Screen):
         yield Header(show_clock=True)
 
         with Vertical(id="menu"):
-            yield Static("Mini Crossword", id="menu-title")
+            yield Static(CROSSWORD_PUZZLE_TITLES[self.puzzle_type], id="menu-title")
             yield Static(id="menu-subtitle")
             yield Static(id="menu-page")
             yield ListView(id="puzzle-list")
@@ -380,7 +399,7 @@ class PuzzleMenuScreen(Screen):
         if not self.puzzle_files:
             page_label.update(
                 "No puzzle JSON files found. Add files like "
-                "2026-06-16.json to puzzle_data/mini/ and press R."
+                f"2026-06-16.json to {self.puzzle_dir}/ and press R."
             )
             return
 
@@ -409,7 +428,7 @@ class PuzzleMenuScreen(Screen):
             return
 
         puzzle_path = self.puzzle_files[puzzle_index]
-        self.app.push_screen(GameScreen(puzzle_path))
+        self.app.push_screen(GameScreen(puzzle_path, self.puzzle_type))
 
     def action_next_page(self) -> None:
         if self.page + 1 < self.page_count:
@@ -434,6 +453,13 @@ class PuzzleMenuScreen(Screen):
 
     def action_reload(self) -> None:
         self.reload_puzzles()
+
+    def action_back(self) -> None:
+        if len(self.app.screen_stack) > 1:
+            self.app.pop_screen()
+        else:
+            self.app.exit()
+
 
 class GameScreen(Screen):
     CSS = """
@@ -539,8 +565,9 @@ class GameScreen(Screen):
         ("f4", "clear", "Clear"),
     ]
 
-    def __init__(self, puzzle_path: str | Path) -> None:
+    def __init__(self, puzzle_path: str | Path, puzzle_type: str) -> None:
         super().__init__()
+        self.puzzle_type = validate_crossword_puzzle_type(puzzle_type)
         self.puzzle_path = Path(puzzle_path)
         self.puzzle = Puzzle.from_json_file(self.puzzle_path)
         self.guesses = [""] * len(self.puzzle.cells)
@@ -593,7 +620,7 @@ class GameScreen(Screen):
         if len(self.app.screen_stack) > 1:
             self.app.pop_screen()
         else:
-            self.app.switch_screen(PuzzleMenuScreen())
+            self.app.switch_screen(PuzzleMenuScreen(self.puzzle_type))
 
     def action_toggle_direction(self) -> None:
         other = "Down" if self.direction == "Across" else "Across"
@@ -825,27 +852,33 @@ class GameScreen(Screen):
         )
 
 
-class MiniCrosswordApp(App):
+class CrosswordPuzzleApp(App):
     CSS = GameScreen.CSS
 
-    def __init__(self, initial_puzzle_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        puzzle_type: str,
+        initial_puzzle_path: str | Path | None = None,
+    ) -> None:
         super().__init__()
+        self.puzzle_type = validate_crossword_puzzle_type(puzzle_type)
         self.initial_puzzle_path = Path(initial_puzzle_path) if initial_puzzle_path else None
 
     def on_mount(self) -> None:
         if self.initial_puzzle_path is not None:
-            self.push_screen(GameScreen(self.initial_puzzle_path))
+            self.push_screen(GameScreen(self.initial_puzzle_path, self.puzzle_type))
         else:
-            self.push_screen(PuzzleMenuScreen())
+            self.push_screen(PuzzleMenuScreen(self.puzzle_type))
 
 
 def main() -> None:
-    if len(sys.argv) > 2:
-        print("Usage: python mini_crossword.py [path/to/puzzle.json]")
+    if len(sys.argv) not in {2, 3}:
+        print("Usage: python crossword.py <mini|midi|crossword> [path/to/puzzle.json]")
         raise SystemExit(2)
 
-    initial_path = sys.argv[1] if len(sys.argv) == 2 else None
-    app = MiniCrosswordApp(initial_path)
+    puzzle_type = sys.argv[1]
+    initial_path = sys.argv[2] if len(sys.argv) == 3 else None
+    app = CrosswordPuzzleApp(puzzle_type, initial_path)
     app.run()
 
 
