@@ -1,284 +1,192 @@
-import aiohttp
 import asyncio
-from tqdm.asyncio import tqdm
-
-import requests
 import json
 import time
-import os
+from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Optional
+from pathlib import Path
+from typing import Any
+
+import aiohttp
+from tqdm.asyncio import tqdm
 
 
 # Daily Crossword Date Range: 1993/11/21 - Present
 # Mini Crossword Date Range:  2014/08/21 - Present
 # Connections Date Range:     2023/06/12 - Present
 
-URL_MINI_PAGE = "https://www.nytimes.com/crosswords/game/mini/2025/08/03"
-URL_MINI_JSON = "https://www.nytimes.com/svc/crosswords/v6/puzzle/mini/2025-08-03.json"
-PUZZLE_DATA_DIR = "puzzle_data"
-CONNECTIONS_DIR = "connections"
-MINI_DIR = "mini"
-CROSSWORD_DIR = "crossword"
+PUZZLE_DATA_DIR = Path("puzzle_data_test")
 
-
-HEADERS = {
-    'accept': '*/*',
-    'accept-language': 'en-US,en;q=0.9',
-    'content-type': 'application/x-www-form-urlencoded',
-    'x-games-auth-bypass': 'true', # Only necessary header for the request
+DEFAULT_HEADERS = {
+    "accept": "*/*",
+    "accept-language": "en-US,en;q=0.9",
+    "content-type": "application/x-www-form-urlencoded",
+    "x-games-auth-bypass": "true",  # Only necessary header for crossword requests
 }
 
 
-## URL Generators
-# Connections JSON
-def connections_json_url_str(date: str) -> str:
-    return f"https://www.nytimes.com/svc/connections/v2/{date}.json"
+@dataclass(frozen=True)
+class PuzzleConfig:
+    """Configuration needed to fetch and store one puzzle type."""
 
-def connections_json_url(date: date) -> str:
-    return connections_json_url_str(date.strftime("%Y-%m-%d"))
+    name: str
+    directory: str
+    json_url_template: str
+    requires_cookies: bool = False
+    default_headers: dict[str, str] | None = None
 
-# Mini JSON
-def mini_json_url_str(date: str) -> str:
-    return f"https://www.nytimes.com/svc/crosswords/v6/puzzle/mini/{date}.json"
+    def json_url(self, puzzle_date: date) -> str:
+        return self.json_url_template.format(date=puzzle_date.isoformat())
 
-def mini_json_url(date: date) -> str:
-    return mini_json_url_str(date.strftime("%Y-%m-%d"))
-
-# Crossword JSON
-def crossword_json_url_str(date: str) -> str:
-    return f"https://www.nytimes.com/svc/crosswords/v6/puzzle/daily/{date}.json"
-
-def crossword_json_url(date: date) -> str:
-    return crossword_json_url_str(date.strftime("%Y-%m-%d"))
-
-# Mini Page
-def mini_page_url_str(date: str) -> str:
-    return f"https://www.nytimes.com/crosswords/game/mini/{date}"
-
-def mini_page_url(date: date) -> str:
-    return mini_page_url_str(date.strftime("%Y/%m/%d"))
+    def output_path(self, puzzle_date: date) -> Path:
+        return PUZZLE_DATA_DIR / self.directory / f"{puzzle_date.isoformat()}.json"
 
 
-## File Operations
-# Path Generators
-def connections_json_path(date: str) -> str:
-    return os.path.join(PUZZLE_DATA_DIR, CONNECTIONS_DIR, f"{date}.json")
+CONNECTIONS = PuzzleConfig(
+    name="connections",
+    directory="connections",
+    json_url_template="https://www.nytimes.com/svc/connections/v2/{date}.json",
+)
 
-def mini_json_path(date: str) -> str:
-    return os.path.join(PUZZLE_DATA_DIR, MINI_DIR, f"{date}.json")
+MINI = PuzzleConfig(
+    name="mini crossword",
+    directory="mini",
+    json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/mini/{date}.json",
+    requires_cookies=True,
+    default_headers=DEFAULT_HEADERS,
+)
 
-def crossword_json_path(date: str) -> str:
-    return os.path.join(PUZZLE_DATA_DIR, CROSSWORD_DIR, f"{date}.json")
+CROSSWORD = PuzzleConfig(
+    name="daily crossword",
+    directory="crossword",
+    json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/daily/{date}.json",
+    requires_cookies=True,
+    default_headers=DEFAULT_HEADERS,
+)
 
-# File Save
-def save_json_to_file(path: str, data: dict) -> str:
-    """Save JSON data to a file."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as file:
-        json.dump(data, file, indent=4)
+
+def mini_page_url(puzzle_date: date) -> str:
+    return f"https://www.nytimes.com/crosswords/game/mini/{puzzle_date:%Y/%m/%d}"
+
+
+def iter_dates(start_date: date, end_date: date):
+    """Yield dates from start_date to end_date, inclusive."""
+    current_date = start_date
+    while current_date <= end_date:
+        yield current_date
+        current_date += timedelta(days=1)
+
+
+def save_json(path: Path, data: dict[str, Any]) -> Path:
+    """Save JSON data to a file and return the path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=4), encoding="utf-8")
     return path
 
-# Connections JSON
-def save_connections_json(date: str, data: dict) -> str:
-    """Save connections JSON data to a file."""
-    return save_json_to_file(connections_json_path(date), data)
 
-def check_connections_json(date: str) -> bool:
-    """Check if connections JSON file exists for a given date."""
-    return os.path.isfile(connections_json_path(date))
-
-# Mini JSON
-def save_mini_json(date: str, data: dict) -> str:
-    """Save mini JSON data to a file."""
-    return save_json_to_file(mini_json_path(date), data)
-
-def check_mini_json(date: str) -> bool:
-    """Check if mini JSON file exists for a given date."""
-    return os.path.isfile(mini_json_path(date))
-
-# Crossword JSON
-def save_crossword_json(date: str, data: dict) -> str:
-    """Save crossword JSON data to a file."""
-    return save_json_to_file(crossword_json_path(date), data)
-
-def check_crossword_json(date: str) -> bool:
-    """Check if crossword JSON file exists for a given date."""
-    return os.path.isfile(crossword_json_path(date))
+async def get_page_cookies(session: aiohttp.ClientSession, url: str) -> dict[str, str]:
+    """Fetch a page and return its response cookies."""
+    async with session.get(url) as response:
+        response.raise_for_status()
+        return {key: cookie.value for key, cookie in response.cookies.items()}
 
 
-def get_page_cookies(url: str) -> dict[str, str]:
-    """Fetch a page and return its cookies."""
-
-    response = requests.get(url)
-    if response.status_code != 200:
-        raise Exception(f"Failed to fetch page: {response.status_code}")
-
-    return response.cookies.get_dict()
-
-
-def get_mini_cookies(puzzle_date: date | None = None) -> dict[str, str]:
+async def get_mini_cookies(
+    session: aiohttp.ClientSession,
+    puzzle_date: date | None = None,
+) -> dict[str, str]:
     """Fetch the NYT Mini Crossword page to get cookies."""
-    if puzzle_date is None:
-        puzzle_date = date.today()
-    url = mini_page_url(puzzle_date)
-
-    return get_page_cookies(url)
+    return await get_page_cookies(session, mini_page_url(puzzle_date or date.today()))
 
 
-def evaluate_unecessary_request_headers(url: str, cookies: dict[str, str]) -> None:
-    """Evaluate which request headers are unecessary.
-    Loops through each item in HEADERS, and tries a request without it."""
-    for header in HEADERS:
-        modified_headers = HEADERS.copy()
-        del modified_headers[header]
-
-        response = requests.get(
-            url,
-            headers=modified_headers,
-            cookies=cookies,
-        )
-        
-        print(f"{header:<30} - {response.status_code}")
-        
-        time.sleep(0.5)
-
-################################################################################
-
-## Puzzle HTTP Request Functions
-async def fetch_data(session: aiohttp.ClientSession, url: str, headers: Optional[dict[str, str]], cookies: Optional[dict[str, str]]) -> dict:
+async def fetch_json(
+    session: aiohttp.ClientSession,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Fetch JSON from a URL."""
     async with session.get(url, headers=headers, cookies=cookies) as response:
-        response.raise_for_status()  # Raise an error for bad responses
+        response.raise_for_status()
         return await response.json()
 
-# Connections
-async def fetch_connections(session: aiohttp.ClientSession, date: date, cookies: Optional[dict[str, str]] = None, headers: Optional[dict[str, str]] = None) -> dict:
-    """Fetch the NYT Mini Crossword connections.
-    Doesn't need cookies or headers."""
-    url = connections_json_url(date)
-    return await fetch_data(session, url, headers=headers, cookies=cookies)
 
-# Mini Crossword
-async def fetch_mini(session: aiohttp.ClientSession, date: date, cookies: dict[str, str], headers: Optional[dict[str, str]] = None) -> dict:
-    """Fetch the NYT Mini Crossword.
-    Requires cookies from the page request.
-    Request headers can be customized, otherwise defaults to HEADERS."""
-    url = mini_json_url(date)
-    if headers is None:
-        headers = HEADERS
+async def download_puzzle(
+    session: aiohttp.ClientSession,
+    config: PuzzleConfig,
+    puzzle_date: date,
+    *,
+    cookies: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Path | None:
+    """Fetch and save one puzzle unless it already exists."""
+    output_path = config.output_path(puzzle_date)
+    if output_path.is_file():
+        return None
 
-    return await fetch_data(session, url, headers=headers, cookies=cookies)
+    request_headers = headers if headers is not None else config.default_headers
+    request_cookies = cookies
 
-# Daily Crossword
-async def fetch_crossword(session: aiohttp.ClientSession, date: date, cookies: dict[str, str], headers: Optional[dict[str, str]] = None) -> dict:
-    """Fetch the NYT Daily Crossword.
-    Requires cookies from the page request.
-    Request headers can be customized, otherwise defaults to HEADERS."""
-    url = crossword_json_url(date)
-    if headers is None:
-        headers = HEADERS
+    if config.requires_cookies and request_cookies is None:
+        request_cookies = await get_mini_cookies(session)
 
-    return await fetch_data(session, url, headers=headers, cookies=cookies)
-
-
-################################################################################
-## Puzzle Fetch and Save Functions
-# Connections
-async def download_connections(session: aiohttp.ClientSession, date: date, cookies: Optional[dict[str, str]] = None, headers: Optional[dict[str, str]] = None) -> None:
-    """Fetch and save the connections for a given date."""
-    # Check if file already exists
-    if check_connections_json(date.strftime("%Y-%m-%d")):
-        return
-    # Fetch the connections data
     try:
-        connections_data = await fetch_connections(session, date, cookies, headers)
-    except aiohttp.ClientResponseError as e:
-        print(f"Failed to fetch connections for {date}: {e}")
-        return
-    # Save the connections data to a file
-    save_connections_json(date.strftime("%Y-%m-%d"), connections_data)
+        data = await fetch_json(
+            session,
+            config.json_url(puzzle_date),
+            headers=request_headers,
+            cookies=request_cookies,
+        )
+    except aiohttp.ClientResponseError as error:
+        print(f"Failed to fetch {config.name} for {puzzle_date}: {error}")
+        return None
 
-# Mini Crossword
-async def download_mini(session: aiohttp.ClientSession, date: date, cookies: dict[str, str] | None = None) -> None:
-    """Fetch and save the mini crossword for a given date."""
-    # Check if file already exists
-    if check_mini_json(date.strftime("%Y-%m-%d")):
-        return
-    # Fetch the NYT Mini Crossword page to get cookies
-    if cookies is None:
-        cookies = get_mini_cookies()
-    # Fetch the NYT Mini Crossword using the cookies
-    try:
-        mini_data = await fetch_mini(session, date, cookies)
-    except aiohttp.ClientResponseError as e:
-        print(f"Failed to fetch mini crossword for {date}: {e}")
-        return
-    # Save the crossword data to a file
-    save_mini_json(date.strftime("%Y-%m-%d"), mini_data)
-
-# Daily Crossword
-async def download_crossword(session: aiohttp.ClientSession, date: date, cookies: dict[str, str] | None = None) -> None:
-    """Fetch and save the daily crossword for a given date."""
-    # Check if file already exists
-    if check_crossword_json(date.strftime("%Y-%m-%d")):
-        return
-    # Fetch the NYT Mini Crossword page to get cookies
-    if cookies is None:
-        cookies = get_mini_cookies()
-    # Fetch the NYT Daily Crossword using the cookies
-    try:
-        crossword_data = await fetch_crossword(session, date, cookies)
-    except aiohttp.ClientResponseError as e:
-        print(f"Failed to fetch daily crossword for {date}: {e}")
-        return
-    # Save the crossword data to a file
-    save_crossword_json(date.strftime("%Y-%m-%d"), crossword_data)
+    return save_json(output_path, data)
 
 
-################################################################################
-## Mass Download
-# Date range helper
-def date_range(start_date: date, end_date: date) -> list[date]:
-    """Generate a list of dates from start_date to end_date (inclusive)."""
-    current_date = start_date
-    dates = []
-    while current_date <= end_date:
-        dates.append(current_date)
-        current_date += timedelta(days=1)
-    return dates
-
-async def download_connections_range(start_date: date, end_date: date) -> None:
-    dates = date_range(start_date, end_date)
-
+async def download_puzzle_range(
+    config: PuzzleConfig,
+    start_date: date,
+    end_date: date,
+) -> None:
+    """Download a puzzle type for every date in the inclusive range."""
     async with aiohttp.ClientSession() as session:
-        tasks = [download_connections(session, d) for d in dates]
+        cookies = None
+        if config.requires_cookies:
+            cookies = await get_mini_cookies(session)
+
+        tasks = [
+            download_puzzle(session, config, puzzle_date, cookies=cookies)
+            for puzzle_date in iter_dates(start_date, end_date)
+        ]
         await tqdm.gather(*tasks)
 
-async def download_mini_range(start_date: date, end_date: date) -> None:
-    dates = date_range(start_date, end_date)
 
-    # Get cookies once
-    cookies = get_mini_cookies()
-
+async def evaluate_unnecessary_request_headers(
+    url: str,
+    cookies: dict[str, str],
+    delay_seconds: float = 0.5,
+) -> None:
+    """Print each default header's response status when omitted from a request."""
     async with aiohttp.ClientSession() as session:
-        tasks = [download_mini(session, d, cookies) for d in dates]
-        await tqdm.gather(*tasks)
+        for header in DEFAULT_HEADERS:
+            modified_headers = DEFAULT_HEADERS.copy()
+            del modified_headers[header]
 
-async def download_crossword_range(start_date: date, end_date: date) -> None:
-    dates = date_range(start_date, end_date)
+            async with session.get(url, headers=modified_headers, cookies=cookies) as response:
+                print(f"{header:<30} - {response.status}")
 
-    # Get cookies once
-    cookies = get_mini_cookies()
+            await asyncio.sleep(delay_seconds)
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [download_crossword(session, d, cookies) for d in dates]
-        await tqdm.gather(*tasks)
+
+async def main() -> None:
+    await download_puzzle_range(CROSSWORD, date(2026, 6, 1), date.today())
+    await download_puzzle_range(MINI, date(2026, 6, 1), date.today())
+    await download_puzzle_range(CONNECTIONS, date(2026, 6, 1), date.today())
+
 
 if __name__ == "__main__":
-    start_time = time.time()
-    #asyncio.run(download_connections_range(date(2025, 6, 12), date.today()))
-    #asyncio.run(download_mini_range(date(2025, 1, 1), date.today()))
-    asyncio.run(download_crossword_range(date(1993, 11, 21), date.today()))
-    #year = 2022
-    end_time = time.time()
-    print(f"Total time taken: {end_time - start_time} seconds")
+    start_time = time.perf_counter()
+    asyncio.run(main())
+    end_time = time.perf_counter()
+    print(f"Total time taken: {end_time - start_time:.2f} seconds")
