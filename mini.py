@@ -790,7 +790,7 @@ class GameScreen(Screen):
             return text
 
         answer_progress = "".join(self.guesses[i] or "_" for i in clue.cells)
-        text.append(f"{clue.label} {clue.direction}: ", style="bold yellow")
+        text.append(f"{clue.label} {clue.direction}: ", style="bold bright_cyan")
         text.append(clue.text)
         text.append(f"\n\n{answer_progress}", style="bold")
         return text
@@ -805,12 +805,12 @@ class GameScreen(Screen):
                 continue
 
             is_active = active_clue is not None and clue.index == active_clue.index
-            label_style = "bold yellow" if is_active else "bold"
-            clue_style = "yellow" if is_active else ""
+            label_style = "bold bright_cyan" if is_active else "bold"
+            clue_style = "bright_cyan" if is_active else ""
 
             text.append(f"{clue.label}. ", style=label_style)
             text.append(clue.text, style=clue_style)
-            text.append("\n\n")
+            text.append("\n")
 
         return text
 
