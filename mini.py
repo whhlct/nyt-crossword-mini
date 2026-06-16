@@ -147,11 +147,11 @@ class CrosswordCell(Static):
     DEFAULT_CSS = """
     CrosswordCell {
         width: 7;
-        height: 4;
+        height: 3;
         background: white;
         color: black;
-        border: solid black;
         text-align: center;
+        padding: 0;
     }
 
     CrosswordCell.block {
@@ -234,7 +234,7 @@ class CrosswordCell(Static):
         guess = self.guess.upper() if self.guess else " "
 
         content = Text()
-        content.append(f"{label:<2}\n", style="dim")
+        content.append(f"{label:<7}\n", style="dim")
         content.append(f"{guess:^5}", style="bold")
         self.update(content)
 
@@ -243,7 +243,7 @@ class CrosswordBoard(Grid):
     """Grid container that owns one widget per crossword square."""
 
     CELL_WIDTH = 7
-    CELL_HEIGHT = 4
+    CELL_HEIGHT = 3
 
     def __init__(self, puzzle: Puzzle) -> None:
         super().__init__(id="board")
