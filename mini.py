@@ -9,7 +9,10 @@ Run:
     python mini_crossword.py 2026-06-16.json
 
 Controls:
-    Arrow keys       Move around the grid
+    Arrow keys       Move within the current direction
+    Perpendicular arrow
+                     Switch direction without moving
+                     e.g. Across + Up/Down switches to Down
     A-Z              Type a letter
     Backspace/Delete Erase
     Tab or Space     Toggle Across/Down
@@ -30,7 +33,7 @@ from typing import Optional
 
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Grid, Horizontal, Vertical
 from textual.widgets import Footer, Header, Static
 
 
@@ -73,6 +76,7 @@ class Puzzle:
             raw = json.load(f)
 
         # The uploaded mini puzzle stores the actual puzzle in body[0].
+        # This fallback also supports passing a puzzle object directly.
         data = raw["body"][0] if "body" in raw else raw
 
         width = int(data["dimensions"]["width"])
@@ -111,6 +115,12 @@ class Puzzle:
                 )
             )
 
+        if len(cells) != width * height:
+            raise ValueError(
+                f"Expected {width * height} cells for a {width}x{height} puzzle, "
+                f"but found {len(cells)}."
+            )
+
         return cls(width=width, height=height, cells=cells, clues=clues)
 
     def first_open_cell(self) -> int:
@@ -131,76 +141,148 @@ class Puzzle:
         return [clue.index for clue in self.clues if clue.direction == direction]
 
 
-class CrosswordBoard(Static):
-    """A simple Rich-rendered crossword grid."""
+class CrosswordCell(Static):
+    """One square in the crossword grid."""
 
-    CELL_WIDTH = 5
-    CELL_HEIGHT = 3
+    DEFAULT_CSS = """
+    CrosswordCell {
+        width: 7;
+        height: 4;
+        background: white;
+        color: black;
+        border: solid black;
+        text-align: center;
+    }
 
-    def update_board(
+    CrosswordCell.block {
+        background: black;
+        color: black;
+    }
+
+    CrosswordCell.in-word {
+        background: ansi_bright_cyan;
+        color: black;
+    }
+
+    CrosswordCell.selected {
+        background: yellow;
+        color: black;
+        text-style: bold;
+    }
+
+    CrosswordCell.correct {
+        background: palegreen;
+        color: black;
+    }
+
+    CrosswordCell.incorrect {
+        background: red;
+        color: white;
+    }
+    """
+
+    def __init__(self, cell: Cell) -> None:
+        super().__init__()
+        self.cell = cell
+        self.guess = ""
+        self.selected = False
+        self.in_word = False
+        self.correct: Optional[bool] = None
+
+    def on_mount(self) -> None:
+        self.update_display()
+
+    def set_state(
         self,
-        puzzle: Puzzle,
+        *,
+        guess: str,
+        selected: bool,
+        in_word: bool,
+        correct: Optional[bool],
+    ) -> None:
+        changed = (
+            self.guess != guess
+            or self.selected != selected
+            or self.in_word != in_word
+            or self.correct != correct
+        )
+
+        if not changed:
+            return
+
+        self.guess = guess
+        self.selected = selected
+        self.in_word = in_word
+        self.correct = correct
+        self.update_display()
+
+    def update_display(self) -> None:
+        self.set_class(self.cell.is_block, "block")
+        self.set_class(not self.cell.is_block and self.in_word, "in-word")
+        self.set_class(not self.cell.is_block and self.selected, "selected")
+        self.set_class(not self.cell.is_block and self.correct is True, "correct")
+        self.set_class(not self.cell.is_block and self.correct is False, "incorrect")
+
+        if self.cell.is_block:
+            self.update("")
+            return
+
+        # Keep the rendered content to two lines. A bordered Static with
+        # height 4 has only two interior rows, so adding an extra blank line
+        # clips the guess letter in many terminals/Textual versions.
+        label = self.cell.label[:2]
+        guess = self.guess.upper() if self.guess else " "
+
+        content = Text()
+        content.append(f"{label:<2}\n", style="dim")
+        content.append(f"{guess:^5}", style="bold")
+        self.update(content)
+
+
+class CrosswordBoard(Grid):
+    """Grid container that owns one widget per crossword square."""
+
+    CELL_WIDTH = 7
+    CELL_HEIGHT = 4
+
+    def __init__(self, puzzle: Puzzle) -> None:
+        super().__init__(id="board")
+        self.puzzle = puzzle
+        self.cell_widgets: dict[int, CrosswordCell] = {}
+
+    def compose(self) -> ComposeResult:
+        for cell in self.puzzle.cells:
+            widget = CrosswordCell(cell)
+            self.cell_widgets[cell.index] = widget
+            yield widget
+
+    def on_mount(self) -> None:
+        self.styles.grid_size_columns = self.puzzle.width
+        self.styles.grid_size_rows = self.puzzle.height
+
+        # Give the grid a concrete size. Some Textual versions do not
+        # expand an auto-sized Grid from its children, which makes the board
+        # appear blank/collapsed even though the cells exist.
+        self.styles.width = self.puzzle.width * self.CELL_WIDTH + 6
+        self.styles.height = self.puzzle.height * self.CELL_HEIGHT + 4
+
+    def update_state(
+        self,
+        *,
         guesses: list[str],
         selected_index: int,
         selected_clue: Optional[Clue],
         correctness: list[Optional[bool]],
     ) -> None:
         selected_word = set(selected_clue.cells) if selected_clue else set()
-        rendered = Text()
 
-        for row in range(puzzle.height):
-            for inner_line in range(self.CELL_HEIGHT):
-                for col in range(puzzle.width):
-                    idx = row * puzzle.width + col
-                    cell = puzzle.cells[idx]
-                    style = self._style_for_cell(
-                        cell=cell,
-                        idx=idx,
-                        selected_index=selected_index,
-                        selected_word=selected_word,
-                        correctness=correctness,
-                    )
-                    rendered.append(self._cell_line(cell, guesses[idx], inner_line), style=style)
-                rendered.append("\n")
-
-        self.update(rendered)
-
-    def _cell_line(self, cell: Cell, guess: str, inner_line: int) -> str:
-        if cell.is_block:
-            return " " * self.CELL_WIDTH
-
-        if inner_line == 0:
-            return cell.label[:2].ljust(self.CELL_WIDTH)
-
-        if inner_line == 1:
-            return guess.upper().center(self.CELL_WIDTH)
-
-        return " " * self.CELL_WIDTH
-
-    def _style_for_cell(
-        self,
-        cell: Cell,
-        idx: int,
-        selected_index: int,
-        selected_word: set[int],
-        correctness: list[Optional[bool]],
-    ) -> str:
-        if cell.is_block:
-            return "white on black"
-
-        if idx == selected_index:
-            return "black on yellow bold"
-
-        if idx in selected_word:
-            return "black on bright_cyan"
-
-        if correctness[idx] is True:
-            return "black on pale_green3"
-
-        if correctness[idx] is False:
-            return "white on red3"
-
-        return "black on white"
+        for i, widget in self.cell_widgets.items():
+            widget.set_state(
+                guess=guesses[i],
+                selected=i == selected_index,
+                in_word=i in selected_word,
+                correct=correctness[i],
+            )
 
 
 class MiniCrosswordApp(App):
@@ -268,7 +350,7 @@ class MiniCrosswordApp(App):
         yield Header(show_clock=True)
 
         with Horizontal(id="main"):
-            yield CrosswordBoard(id="board")
+            yield CrosswordBoard(self.puzzle)
 
             with Vertical(id="sidebar"):
                 yield Static(id="current")
@@ -335,7 +417,7 @@ class MiniCrosswordApp(App):
             filled += 1
             is_correct = self.guesses[i].upper() == cell.answer
             self.correctness[i] = is_correct
-            wrong += not is_correct
+            wrong += int(not is_correct)
 
         if filled == 0:
             self.refresh_ui("Nothing to check yet.")
@@ -344,7 +426,8 @@ class MiniCrosswordApp(App):
         elif wrong == 0:
             self.refresh_ui("All filled letters are correct so far.")
         else:
-            self.refresh_ui(f"{wrong} filled letter{'s' if wrong != 1 else ''} incorrect.")
+            suffix = "s" if wrong != 1 else ""
+            self.refresh_ui(f"{wrong} filled letter{suffix} incorrect.")
 
     def action_reveal(self) -> None:
         for i, cell in enumerate(self.puzzle.cells):
@@ -381,9 +464,13 @@ class MiniCrosswordApp(App):
         self.refresh_ui()
 
     def move_selection(self, key: str) -> None:
-        # Match NYT-style behavior:
-        # - If solving Across and user presses Up/Down, switch to Down without moving.
-        # - If solving Down and user presses Left/Right, switch to Across without moving.
+        """
+        Move NYT-style.
+
+        If the arrow is perpendicular to the current solve direction, switch
+        direction without moving the cursor. Otherwise, move in the current
+        direction.
+        """
         if self.direction == "Across" and key in {"up", "down"}:
             if self.puzzle.clue_for_cell(self.selected_index, "Down"):
                 self.direction = "Down"
@@ -448,8 +535,8 @@ class MiniCrosswordApp(App):
         if clue:
             return clue
 
-        # If this cell does not have a clue in the current direction,
-        # switch to the other valid direction.
+        # If this cell has no clue in the current direction, switch to the
+        # other valid direction.
         other = "Down" if self.direction == "Across" else "Across"
         clue = self.puzzle.clue_for_cell(self.selected_index, other)
         if clue:
@@ -467,8 +554,7 @@ class MiniCrosswordApp(App):
         clue = self.current_clue()
 
         board = self.query_one("#board", CrosswordBoard)
-        board.update_board(
-            puzzle=self.puzzle,
+        board.update_state(
             guesses=self.guesses,
             selected_index=self.selected_index,
             selected_clue=clue,
@@ -482,6 +568,7 @@ class MiniCrosswordApp(App):
     def current_clue_text(self, clue: Optional[Clue]) -> Text:
         text = Text()
         text.append("Current clue\n", style="bold")
+
         if clue is None:
             text.append("No clue selected.")
             return text
@@ -513,23 +600,19 @@ class MiniCrosswordApp(App):
         open_cells = [cell for cell in self.puzzle.cells if not cell.is_block]
         filled = sum(1 for cell in open_cells if self.guesses[cell.index])
         total = len(open_cells)
-        return f"{filled}/{total} letters filled. Tab/Space toggles direction. F2 checks, F3 reveals, F4 clears."
+        return (
+            f"{filled}/{total} letters filled. "
+            "Arrow keys move or switch direction. "
+            "F2 checks, F3 reveals, F4 clears."
+        )
 
 
 def main() -> None:
-    if len(sys.argv) > 2:
-        print("Usage: python mini_crossword.py [path/to/puzzle.json]")
+    if len(sys.argv) != 2:
+        print("Usage: python mini_crossword.py path/to/puzzle.json")
         raise SystemExit(2)
 
-    if len(sys.argv) == 2:
-        puzzle_path = Path(sys.argv[1])
-    else:
-        from datetime import date
-
-        today = date.today().strftime("%Y-%m-%d")
-        puzzle_path = Path("puzzle_data") / "mini" / f"{today}.json"
-
-    app = MiniCrosswordApp(puzzle_path)
+    app = MiniCrosswordApp(sys.argv[1])
     app.run()
 
 
