@@ -41,7 +41,7 @@ from typing import Optional
 
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.containers import Grid, Horizontal, Vertical
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
@@ -316,6 +316,73 @@ class CrosswordBoard(Grid):
             )
 
 
+class ClueRow(Static):
+    """One clue row in a scrollable clue list."""
+
+    def __init__(self, clue: Clue) -> None:
+        super().__init__(classes="clue-row")
+        self.clue = clue
+
+    def on_mount(self) -> None:
+        text = Text()
+        text.append(f"{self.clue.label}. ", style="bold")
+        text.append(self.clue.text)
+        self.update(text)
+
+    def set_active(self, active: bool) -> None:
+        self.set_class(active, "active")
+
+
+class ClueList(VerticalScroll):
+    """Scrollable clue list that can keep the active clue in view."""
+
+    def __init__(self, puzzle: Puzzle, direction: Direction, *, id: str) -> None:
+        super().__init__(id=id, classes="clue-panel")
+        self.puzzle = puzzle
+        self.direction = direction
+        self.clue_rows: dict[int, ClueRow] = {}
+
+    def compose(self) -> ComposeResult:
+        yield Static(self.direction, classes="clue-header")
+
+        for clue in self.puzzle.clues:
+            if clue.direction != self.direction:
+                continue
+
+            row = ClueRow(clue)
+            self.clue_rows[clue.index] = row
+            yield row
+
+    def set_active_clue(self, active_clue: Optional[Clue]) -> None:
+        active_index = active_clue.index if active_clue else None
+
+        for clue_index, row in self.clue_rows.items():
+            row.set_active(clue_index == active_index)
+
+        if active_index is not None:
+            self.scroll_clue_visible(active_index)
+
+    def scroll_clue_visible(self, clue_index: int) -> None:
+        row = self.clue_rows.get(clue_index)
+        if row is None:
+            return
+
+        clue_region = row.virtual_region
+        viewport_top = self.scroll_y
+        viewport_bottom = viewport_top + self.container_size.height
+        clue_top = clue_region.y
+        clue_bottom = clue_region.y + clue_region.height
+
+        if clue_top < viewport_top:
+            self.scroll_to(y=clue_top, animate=False, immediate=True)
+        elif clue_bottom > viewport_bottom:
+            self.scroll_to(
+                y=clue_bottom - self.container_size.height,
+                animate=False,
+                immediate=True,
+            )
+
+
 def find_puzzle_files(puzzle_dir: Path) -> list[Path]:
     """Return puzzle JSON files sorted by date-like filename, newest first."""
     if not puzzle_dir.exists():
@@ -512,6 +579,11 @@ class GameScreen(Screen):
         padding: 1 2;
     }
 
+    #board-scroll {
+        width: 2fr;
+        height: 1fr;
+    }
+
     #board {
         width: auto;
         height: auto;
@@ -521,11 +593,12 @@ class GameScreen(Screen):
 
     #sidebar {
         width: 1fr;
+        height: 1fr;
         padding-left: 2;
     }
 
     #current {
-        height: auto;
+        height: 6;
         border: round yellow;
         padding: 1;
         margin-bottom: 1;
@@ -540,8 +613,21 @@ class GameScreen(Screen):
         height: 1fr;
         border: round white;
         padding: 1;
-        overflow-y: auto;
-        content-align: left top;
+    }
+
+    .clue-header {
+        height: 1;
+        text-style: bold underline;
+    }
+
+    .clue-row {
+        height: auto;
+        padding: 0 1 0 0;
+    }
+
+    .clue-row.active {
+        color: ansi_bright_cyan;
+        text-style: bold;
     }
 
     #across-clues {
@@ -579,13 +665,14 @@ class GameScreen(Screen):
         yield Header(show_clock=True)
 
         with Horizontal(id="main"):
-            yield CrosswordBoard(self.puzzle)
+            with VerticalScroll(id="board-scroll"):
+                yield CrosswordBoard(self.puzzle)
 
             with Vertical(id="sidebar"):
                 yield Static(id="current")
                 with Horizontal(id="clue-lists"):
-                    yield Static(id="across-clues", classes="clue-panel")
-                    yield Static(id="down-clues", classes="clue-panel")
+                    yield ClueList(self.puzzle, "Across", id="across-clues")
+                    yield ClueList(self.puzzle, "Down", id="down-clues")
 
         yield Static(id="status")
         yield Footer()
@@ -804,9 +891,32 @@ class GameScreen(Screen):
         )
 
         self.query_one("#current", Static).update(self.current_clue_text(clue))
-        self.query_one("#across-clues", Static).update(self.clues_text("Across", clue))
-        self.query_one("#down-clues", Static).update(self.clues_text("Down", clue))
+        self.query_one("#across-clues", ClueList).set_active_clue(clue)
+        self.query_one("#down-clues", ClueList).set_active_clue(clue)
         self.query_one("#status", Static).update(status or self.progress_text())
+        self.scroll_selected_cell_visible()
+
+    def scroll_selected_cell_visible(self) -> None:
+        board = self.query_one("#board", CrosswordBoard)
+        board_scroll = self.query_one("#board-scroll", VerticalScroll)
+        selected_cell = board.cell_widgets.get(self.selected_index)
+        if selected_cell is None:
+            return
+
+        cell_region = selected_cell.virtual_region
+        viewport_top = board_scroll.scroll_y
+        viewport_bottom = viewport_top + board_scroll.container_size.height
+        cell_top = cell_region.y
+        cell_bottom = cell_region.y + cell_region.height
+
+        if cell_top < viewport_top:
+            board_scroll.scroll_to(y=cell_top, animate=False, immediate=True)
+        elif cell_bottom > viewport_bottom:
+            board_scroll.scroll_to(
+                y=cell_bottom - board_scroll.container_size.height,
+                animate=False,
+                immediate=True,
+            )
 
     def current_clue_text(self, clue: Optional[Clue]) -> Text:
         text = Text()
@@ -820,25 +930,6 @@ class GameScreen(Screen):
         text.append(f"{clue.label} {clue.direction}: ", style="bold bright_cyan")
         text.append(clue.text)
         text.append(f"\n\n{answer_progress}", style="bold")
-        return text
-
-    def clues_text(self, direction: Direction, active_clue: Optional[Clue]) -> Text:
-        text = Text()
-        text.append(direction, style="bold underline")
-        text.append("\n")
-
-        for clue in self.puzzle.clues:
-            if clue.direction != direction:
-                continue
-
-            is_active = active_clue is not None and clue.index == active_clue.index
-            label_style = "bold bright_cyan" if is_active else "bold"
-            clue_style = "bright_cyan" if is_active else ""
-
-            text.append(f"{clue.label}. ", style=label_style)
-            text.append(clue.text, style=clue_style)
-            text.append("\n")
-
         return text
 
     def progress_text(self) -> str:
