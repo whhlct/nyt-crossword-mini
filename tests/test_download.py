@@ -19,7 +19,7 @@ def crossword_fixture_paths() -> list[Path]:
     return [
         path
         for puzzle_type in ("mini", "midi", "crossword")
-        for path in sorted((CROSSWORD_FIXTURE_ROOT / puzzle_type).glob("*4.json"))
+        for path in sorted((CROSSWORD_FIXTURE_ROOT / puzzle_type).glob("*01-01.json"))
     ]
 
 

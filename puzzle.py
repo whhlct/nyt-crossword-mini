@@ -264,6 +264,12 @@ def svg_element_to_json(element: minidom.Element) -> dict[str, Any]:
                 if attribute["name"] == "cy":
                     attribute["value"] = "11.10"
                     break
+        if attribute_values.get("class") == "tatter" and attribute_values.get("cy") == "15.00":
+            for attribute in node["attributes"]:
+                if attribute["name"] == "cy":
+                    attribute["value"] = "15.20"
+                elif attribute["name"] == "r" and attribute["value"] == "6.00":
+                    attribute["value"] = "6.10"
 
     children = []
     text = []
