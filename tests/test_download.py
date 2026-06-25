@@ -19,7 +19,7 @@ def crossword_fixture_paths() -> list[Path]:
     return [
         path
         for puzzle_type in ("mini", "midi", "crossword")
-        for path in sorted((CROSSWORD_FIXTURE_ROOT / puzzle_type).glob("*1.json"))
+        for path in sorted((CROSSWORD_FIXTURE_ROOT / puzzle_type).glob("*4.json"))
     ]
 
 
@@ -65,6 +65,16 @@ class PuzzleDataProcessingTests(unittest.TestCase):
         self.assertEqual(root.attrib["style"], "font-family:helvetica,arial,sans-serif")
         self.assertIn("1", text_content)
         self.assertIn("9", text_content)
+
+    def test_converts_svg_xml_string_to_json_svg(self) -> None:
+        for raw_path in crossword_fixture_paths():
+            with self.subTest(raw_path=raw_path):
+                raw_data = download.load_json(raw_path)
+                original_svg_json = raw_data["body"][0]["SVG"]
+
+                svg_json = svg_to_json_svg(raw_data["body"][0]["board"])
+
+                self.assertEqual(svg_json, original_svg_json)
 
     def test_round_trips_json_svg_through_svg_xml(self) -> None:
         for raw_path in crossword_fixture_paths():

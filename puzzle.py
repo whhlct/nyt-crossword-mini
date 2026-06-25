@@ -121,6 +121,23 @@ def path_node_to_json(node: dict[str, Any]) -> dict[str, Any]:
             converted_attributes.append({"name": "class", "value": attributes["class"]})
         return {"name": "polygon", "attributes": converted_attributes}
 
+    relative_polygon_match = re.fullmatch(
+        rf"M({NUMBER_RE}) ({NUMBER_RE})H({NUMBER_RE})l({NUMBER_RE}) ({NUMBER_RE})z",
+        path,
+    )
+    if relative_polygon_match:
+        end_x = float(relative_polygon_match.group(3)) + float(relative_polygon_match.group(4))
+        end_y = float(relative_polygon_match.group(2)) + float(relative_polygon_match.group(5))
+        points = (
+            f"{format_svg_number(relative_polygon_match.group(1))},{format_svg_number(relative_polygon_match.group(2))} "
+            f"{format_svg_number(relative_polygon_match.group(3))},{format_svg_number(relative_polygon_match.group(2))} "
+            f"{format_svg_number(end_x)},{format_svg_number(end_y)}"
+        )
+        converted_attributes = [{"name": "points", "value": points}]
+        if "class" in attributes:
+            converted_attributes.append({"name": "class", "value": attributes["class"]})
+        return {"name": "polygon", "attributes": converted_attributes}
+
     rect_match = re.fullmatch(
         rf"M({NUMBER_RE}) ({NUMBER_RE})h({NUMBER_RE})v({NUMBER_RE})H({NUMBER_RE})z",
         path,
