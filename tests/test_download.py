@@ -7,10 +7,20 @@ from xml.etree import ElementTree
 
 import aiohttp
 import download
-from puzzle import Puzzle, json_svg_to_svg
+from puzzle import Puzzle, json_svg_to_svg, svg_to_json_svg
 
 
 FIXTURE_ROOT = Path(__file__).parent
+#CROSSWORD_FIXTURE_ROOT = FIXTURE_ROOT / "test_puzzle_data_original"
+CROSSWORD_FIXTURE_ROOT = Path(__file__).parent.parent / "puzzle_data_original"
+
+
+def crossword_fixture_paths() -> list[Path]:
+    return [
+        path
+        for puzzle_type in ("mini", "midi", "crossword")
+        for path in sorted((CROSSWORD_FIXTURE_ROOT / puzzle_type).glob("*1.json"))
+    ]
 
 
 class PuzzleDataProcessingTests(unittest.TestCase):
@@ -55,9 +65,18 @@ class PuzzleDataProcessingTests(unittest.TestCase):
         self.assertEqual(root.attrib["style"], "font-family:helvetica,arial,sans-serif")
         self.assertIn("1", text_content)
         self.assertIn("9", text_content)
-        print(f"Generated SVG:\n{svg}")  # For visual inspection of the generated SVG string
-        print(f"\nOriginal SVG:\n{raw_data["body"][0]["board"]}")  # For visual inspection of the original SVG data
-        self.assertEqual(svg, raw_data["body"][0]["board"])
+
+    def test_round_trips_json_svg_through_svg_xml(self) -> None:
+        for raw_path in crossword_fixture_paths():
+            with self.subTest(raw_path=raw_path):
+                raw_data = download.load_json(raw_path)
+                original_svg_json = raw_data["body"][0]["SVG"]
+
+                svg_xml = json_svg_to_svg(original_svg_json)
+                round_tripped_svg_json = svg_to_json_svg(svg_xml)
+
+                self.assertEqual(round_tripped_svg_json, original_svg_json)
+
 
     def assert_processed_fixture_matches_original_data(
         self,
