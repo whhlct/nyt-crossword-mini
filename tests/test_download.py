@@ -64,18 +64,14 @@ class DownloadPuzzleTests(unittest.IsolatedAsyncioTestCase):
         )
 
         cached_data_session = cast(aiohttp.ClientSession, object())
+        output_path = await download.download_and_save_puzzle(
+            cached_data_session,
+            download.MINI,
+            self.puzzle_date,
+            puzzle_data_dir=self.puzzle_data_dir,
+            original_data_dir=self.original_data_dir,
+        )
 
-        with patch.object(download, "PUZZLE_DATA_DIR", self.puzzle_data_dir):
-            output_path = await download.download_puzzle(
-                cached_data_session,
-                download.MINI,
-                self.puzzle_date,
-                original_data_dir=self.original_data_dir,
-            )
-
-        self.assertIsNotNone(output_path)
-        if output_path is None:
-            return
         self.assertEqual(output_path, self.puzzle_data_dir / "mini" / "2014-08-21.json")
         self.assertTrue(output_path.is_file())
 

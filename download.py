@@ -45,11 +45,8 @@ class PuzzleConfig:
     def json_url(self, puzzle_date: date) -> str:
         return self.json_url_template.format(date=puzzle_date.isoformat())
 
-    def output_path(self, puzzle_date: date) -> Path:
-        return PUZZLE_DATA_DIR / self.directory / f"{puzzle_date.isoformat()}.json"
-
-    def original_path(self, puzzle_date: date, original_data_dir: Path) -> Path:
-        return original_data_dir / self.directory / f"{puzzle_date.isoformat()}.json"
+    def puzzle_file_path(self, puzzle_date: date, data_dir: Path) -> Path:
+        return data_dir / self.directory / f"{puzzle_date.isoformat()}.json"
 
 
 CONNECTIONS = PuzzleConfig(
@@ -137,7 +134,7 @@ async def get_mini_cookies(
     return await get_page_cookies(session, mini_page_url(puzzle_date or date.today()))
 
 
-async def fetch_json(
+async def fetch_json_url(
     session: aiohttp.ClientSession,
     url: str,
     *,
@@ -150,49 +147,71 @@ async def fetch_json(
         return await response.json()
 
 
-async def download_puzzle(
+async def fetch_puzzle_data(
     session: aiohttp.ClientSession,
     config: PuzzleConfig,
     puzzle_date: date,
     *,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Fetches puzzle data from server. Prepares and makes a request using config and date."""
+    request_headers = headers if headers is not None else config.default_headers
+    request_cookies = cookies
+
+    if config.requires_cookies and request_cookies is None:
+        request_cookies = await get_mini_cookies(session)
+
+    try:
+        data = await fetch_json_url(
+            session,
+            config.json_url(puzzle_date),
+            headers=request_headers,
+            cookies=request_cookies,
+        )
+    except aiohttp.ClientResponseError as error:
+        raise Exception(f"Failed to fetch {config.name} for {puzzle_date}: {error}")
+    
+    return data
+
+
+async def download_and_save_puzzle(
+    session: aiohttp.ClientSession,
+    config: PuzzleConfig,
+    puzzle_date: date,
+    *,
+    puzzle_data_dir: Path = PUZZLE_DATA_DIR,
     original_data_dir: Path | None = None,
     cookies: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
-) -> Path | None:
+) -> Path:
     """Fetch and save one puzzle unless it already exists."""
-    output_path = config.output_path(puzzle_date)
+    # Check if the puzzle has already been downloaded
+    output_path = config.puzzle_file_path(puzzle_date, puzzle_data_dir)
     if output_path.is_file():
-        return None
+        return output_path
 
     original_path = (
-        config.original_path(puzzle_date, original_data_dir)
+        config.puzzle_file_path(puzzle_date, original_data_dir)
         if original_data_dir is not None
         else None
     )
 
     if original_path is not None and original_path.is_file():
-        # Original puzzle data found
+        # Fetch puzzle data from the original data directory if it exists
         data = load_json(original_path)
     else:
-        request_headers = headers if headers is not None else config.default_headers
-        request_cookies = cookies
-
-        if config.requires_cookies and request_cookies is None:
-            request_cookies = await get_mini_cookies(session)
-
-        try:
-            data = await fetch_json(
-                session,
-                config.json_url(puzzle_date),
-                headers=request_headers,
-                cookies=request_cookies,
-            )
-        except aiohttp.ClientResponseError as error:
-            print(f"Failed to fetch {config.name} for {puzzle_date}: {error}")
-            return None
+        # Fetch puzzle data from the server
+        data = await fetch_puzzle_data(
+            session,
+            config,
+            puzzle_date,
+            headers=headers,
+            cookies=cookies
+        )
 
         if original_path is not None:
-            # If original puzzle data path is set, save the OPD there
+            # If original puzzle data path is set, save the fetched data there
             save_json(original_path, data)
 
     return save_json(output_path, config.process_data(data))
@@ -215,7 +234,7 @@ async def download_puzzle_range(
 
         async def download_with_limit(puzzle_date: date) -> Path | None:
             async with semaphore:
-                return await download_puzzle(
+                return await download_and_save_puzzle(
                     session,
                     config,
                     puzzle_date,
