@@ -7,7 +7,7 @@ from xml.etree import ElementTree
 
 import aiohttp
 import download
-from puzzle import Puzzle, json_svg_to_svg, svg_to_json_svg
+from puzzle import Puzzle, generate_svg_json_from_puzzle_data, json_svg_to_svg, svg_to_json_svg
 
 
 FIXTURE_ROOT = Path(__file__).parent
@@ -19,7 +19,7 @@ def crossword_fixture_paths() -> list[Path]:
     return [
         path
         for puzzle_type in ("mini", "midi", "crossword")
-        for path in sorted((CROSSWORD_FIXTURE_ROOT / puzzle_type).glob("*01-01.json"))
+        for path in sorted((CROSSWORD_FIXTURE_ROOT / puzzle_type).glob("*3.json"))
     ]
 
 
@@ -86,6 +86,33 @@ class PuzzleDataProcessingTests(unittest.TestCase):
                 round_tripped_svg_json = svg_to_json_svg(svg_xml)
 
                 self.assertEqual(round_tripped_svg_json, original_svg_json)
+
+    def test_generates_svg_json_from_mini_puzzle_data(self) -> None:
+        raw_path = FIXTURE_ROOT / "test_puzzle_data_original" / "mini" / "2026-06-23.json"
+        raw_data = download.load_json(raw_path)
+        puzzle_data = raw_data["body"][0]
+
+        generated_svg_json = generate_svg_json_from_puzzle_data(puzzle_data)
+
+        self.assertEqual(generated_svg_json, puzzle_data["SVG"])
+
+    def test_generates_svg_json_from_midi_puzzle_data(self) -> None:
+        raw_path = FIXTURE_ROOT / "test_puzzle_data_original" / "midi" / "2026-06-23.json"
+        raw_data = download.load_json(raw_path)
+        puzzle_data = raw_data["body"][0]
+
+        generated_svg_json = generate_svg_json_from_puzzle_data(puzzle_data)
+
+        self.assertEqual(generated_svg_json, puzzle_data["SVG"])
+
+    def test_generates_svg_json_from_crossword_puzzle_data(self) -> None:
+        raw_path = FIXTURE_ROOT / "test_puzzle_data_original" / "crossword" / "2026-06-23.json"
+        raw_data = download.load_json(raw_path)
+        puzzle_data = raw_data["body"][0]
+
+        generated_svg_json = generate_svg_json_from_puzzle_data(puzzle_data)
+
+        self.assertEqual(generated_svg_json, puzzle_data["SVG"])
 
 
     def assert_processed_fixture_matches_original_data(

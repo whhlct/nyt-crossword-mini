@@ -59,6 +59,286 @@ def json_svg_to_svg(svg: dict[str, Any]) -> str:
     return f"<{name}{rendered_attributes}>{content}{children}</{name}>"
 
 
+def svg_attribute(name: str, value: str | float) -> dict[str, str]:
+    """Build a JSON SVG attribute record."""
+    return {"name": name, "value": str(value)}
+
+
+def svg_numeric_attribute(name: str, value: str | float) -> dict[str, str]:
+    """Build a JSON SVG numeric attribute record."""
+    return svg_attribute(name, format_svg_number(value))
+
+
+def crossword_cell_size(width: int) -> float:
+    """Return the NYT SVG cell size for a crossword grid width."""
+    if width == 5:
+        return 100.0
+    if width in {9, 15}:
+        return 495.0 / width
+    return 483.0 / width
+
+
+def generate_svg_json_from_puzzle_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Generate NYT-style SVG JSON from crossword puzzle dimensions and cells."""
+    width = int(data["dimensions"]["width"])
+    height = int(data["dimensions"]["height"])
+    cell_size = crossword_cell_size(width)
+    origin = 3.0
+    board_width = cell_size * width
+    board_height = cell_size * height
+    viewbox_width = board_width + 6.0
+    viewbox_height = board_height + 6.0
+
+    return {
+        "name": "svg",
+        "attributes": [
+            svg_attribute("xmlns", "http://www.w3.org/2000/svg"),
+            svg_attribute(
+                "viewBox",
+                f"0 0 {format_svg_number(viewbox_width)} {format_svg_number(viewbox_height)}",
+            ),
+        ],
+        "children": [
+            generate_svg_defs(cell_size),
+            generate_svg_cells(data["cells"], width, cell_size, origin),
+            generate_svg_grid(width, height, cell_size, origin),
+        ],
+        "styles": [{"name": "font-family", "value": "helvetica,arial,sans-serif"}],
+    }
+
+
+def generate_svg_defs(cell_size: float) -> dict[str, Any]:
+    """Generate reusable SVG defs for checked, modified, and revealed markers."""
+    origin = 3.0
+    edge = origin + cell_size
+    flag_x = origin + (cell_size * 2.0 / 3.0)
+    flag_y = origin + (cell_size / 3.0)
+    tatter_cx = origin + (cell_size * 0.9024)
+    tatter_cy = origin + (cell_size * 0.0976)
+    tatter_r = cell_size * 0.0488
+    flag_points = (
+        f"{format_svg_number(edge)},{format_svg_number(origin)} "
+        f"{format_svg_number(flag_x)},{format_svg_number(origin)} "
+        f"{format_svg_number(edge)},{format_svg_number(flag_y)}"
+    )
+
+    flag = {
+        "name": "polygon",
+        "attributes": [
+            svg_attribute("points", flag_points),
+            svg_attribute("class", "flag"),
+        ],
+    }
+
+    return {
+        "name": "defs",
+        "children": [
+            {
+                "name": "g",
+                "attributes": [svg_attribute("id", "checked")],
+                "children": [
+                    {
+                        "name": "line",
+                        "attributes": [
+                            svg_numeric_attribute("x1", edge),
+                            svg_numeric_attribute("y1", origin),
+                            svg_numeric_attribute("x2", origin),
+                            svg_numeric_attribute("y2", edge),
+                            svg_attribute("class", "slash"),
+                        ],
+                    }
+                ],
+            },
+            {
+                "name": "g",
+                "attributes": [svg_attribute("id", "modified")],
+                "children": [flag],
+            },
+            {
+                "name": "g",
+                "attributes": [svg_attribute("id", "revealed")],
+                "children": [
+                    flag,
+                    {
+                        "name": "circle",
+                        "attributes": [
+                            svg_numeric_attribute("cx", tatter_cx),
+                            svg_numeric_attribute("cy", tatter_cy),
+                            svg_numeric_attribute("r", tatter_r),
+                            svg_attribute("class", "tatter"),
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def generate_svg_cells(
+    cells: list[dict[str, Any]],
+    width: int,
+    cell_size: float,
+    origin: float,
+) -> dict[str, Any]:
+    """Generate the SVG JSON cells group."""
+    return {
+        "name": "g",
+        "attributes": [svg_attribute("data-group", "cells")],
+        "children": [
+            generate_svg_cell(cell, index, width, cell_size, origin)
+            for index, cell in enumerate(cells)
+        ],
+    }
+
+
+def generate_svg_cell(
+    cell: dict[str, Any],
+    index: int,
+    width: int,
+    cell_size: float,
+    origin: float,
+) -> dict[str, Any]:
+    """Generate one SVG JSON cell group."""
+    row, col = divmod(index, width)
+    x = origin + (col * cell_size)
+    y = origin + (row * cell_size)
+    children = [
+        {
+            "name": "rect",
+            "attributes": [
+                svg_numeric_attribute("x", x),
+                svg_numeric_attribute("y", y),
+                svg_numeric_attribute("width", cell_size),
+                svg_numeric_attribute("height", cell_size),
+                svg_attribute("fill", "none" if cell else "black"),
+            ],
+        }
+    ]
+
+    if not cell:
+        return {"name": "g", "children": children}
+
+    if cell.get("type") == 2:
+        children.append(generate_svg_circle_marker(cell, x, y, cell_size))
+
+    label = str(cell.get("label", ""))
+    if label:
+        children.append(
+            {
+                "name": "text",
+                "attributes": [
+                    svg_numeric_attribute("x", x + 2.0),
+                    svg_numeric_attribute("y", y + (cell_size / 3.0) + 0.5),
+                    svg_attribute("text-anchor", "start"),
+                    svg_numeric_attribute("font-size", cell_size / 3.0),
+                ],
+                "content": label,
+            }
+        )
+
+    children.append(
+        {
+            "name": "text",
+            "attributes": [
+                svg_numeric_attribute("x", x + (cell_size / 2.0)),
+                svg_numeric_attribute("y", y + (cell_size * 11.0 / 12.0)),
+                svg_attribute("text-anchor", "middle"),
+                svg_numeric_attribute("font-size", cell_size * 2.0 / 3.0),
+            ],
+        }
+    )
+
+    return {"name": "g", "children": children}
+
+
+def generate_svg_circle_marker(
+    cell: dict[str, Any],
+    x: float,
+    y: float,
+    cell_size: float,
+) -> dict[str, Any]:
+    """Generate the SVG JSON marker for a circled crossword cell."""
+    radius = (cell_size / 2.0) - 0.25
+    if cell.get("label"):
+        return {
+            "name": "path",
+            "attributes": [
+                svg_attribute(
+                    "d",
+                    (
+                        f"M{format_svg_number(x + 0.5)} {format_svg_number(y + (cell_size / 2.0) + 0.25)} "
+                        f"a{format_svg_number(radius)} {format_svg_number(radius)} "
+                        f"0 1 0 {format_svg_number(radius)} -{format_svg_number(radius)}"
+                    ),
+                ),
+                svg_attribute("stroke", "dimgray"),
+                svg_attribute("fill", "none"),
+                svg_attribute("vector-effect", "non-scaling-stroke"),
+            ],
+        }
+
+    return {
+        "name": "circle",
+        "attributes": [
+            svg_numeric_attribute("cx", x + (cell_size / 2.0)),
+            svg_numeric_attribute("cy", y + (cell_size / 2.0)),
+            svg_numeric_attribute("r", radius),
+            svg_attribute("stroke", "dimgray"),
+            svg_attribute("fill", "none"),
+            svg_attribute("vector-effect", "non-scaling-stroke"),
+        ],
+    }
+
+
+def generate_svg_grid(
+    width: int,
+    height: int,
+    cell_size: float,
+    origin: float,
+) -> dict[str, Any]:
+    """Generate the SVG JSON grid and frame."""
+    board_width = cell_size * width
+    board_height = cell_size * height
+    horizontal_lines = [
+        f"M{format_svg_number(origin)},{format_svg_number(origin + (row * cell_size))} "
+        f"l{format_svg_number(board_width)},0.00"
+        for row in range(1, height)
+    ]
+    vertical_lines = [
+        f"M{format_svg_number(origin + (col * cell_size))},{format_svg_number(origin)} "
+        f"l0.00,{format_svg_number(board_height)}"
+        for col in range(1, width)
+    ]
+
+    return {
+        "name": "g",
+        "attributes": [svg_attribute("data-group", "grid")],
+        "children": [
+            {
+                "name": "path",
+                "attributes": [
+                    svg_attribute("d", " ".join(horizontal_lines + vertical_lines)),
+                    svg_attribute("stroke", "dimgray"),
+                    svg_attribute("fill", "none"),
+                    svg_attribute("vector-effect", "non-scaling-stroke"),
+                ],
+            },
+            {
+                "name": "rect",
+                "attributes": [
+                    svg_numeric_attribute("x", 1.5),
+                    svg_numeric_attribute("y", 1.5),
+                    svg_numeric_attribute("width", board_width + 3.0),
+                    svg_numeric_attribute("height", board_height + 3.0),
+                    svg_attribute("fill", "none"),
+                    svg_attribute("stroke", "black"),
+                    svg_numeric_attribute("stroke-width", 3.0),
+                ],
+            },
+        ],
+    }
+
+
 def svg_to_json_svg(svg: str) -> dict[str, Any]:
     """Convert an XML SVG string to NYT-style JSON SVG data."""
     document = minidom.parseString(svg)
