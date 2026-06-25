@@ -1,11 +1,46 @@
 import json
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import Any
 from typing import Optional
 
 
 Direction = str  # "Across" or "Down"
+
+
+def svg_style_attribute(styles: list[dict[str, Any]]) -> str:
+    """Convert JSON SVG style records to a CSS style attribute value."""
+    return ";".join(
+        f"{style['name']}:{style['value']}"
+        for style in styles
+        if "name" in style and "value" in style
+    )
+
+
+def json_svg_to_svg(svg: dict[str, Any]) -> str:
+    """Convert NYT's JSON-formatted SVG tree to an XML SVG string."""
+    name = str(svg["name"])
+    attributes = [
+        (str(attribute["name"]), str(attribute["value"]))
+        for attribute in svg.get("attributes", [])
+    ]
+
+    style = svg_style_attribute(svg.get("styles", []))
+    if style:
+        attributes.append(("style", style))
+
+    rendered_attributes = "".join(
+        f' {name}="{escape(value, quote=True)}"'
+        for name, value in attributes
+    )
+    content = escape(str(svg.get("content", "")))
+    children = "".join(json_svg_to_svg(child) for child in svg.get("children", []))
+
+    if not content and not children:
+        return f"<{name}{rendered_attributes}/>"
+
+    return f"<{name}{rendered_attributes}>{content}{children}</{name}>"
 
 
 @dataclass(frozen=True)
