@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from crossword import Puzzle
+from puzzle import Puzzle
 
 
 class PuzzleLoadingTests(unittest.TestCase):

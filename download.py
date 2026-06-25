@@ -10,6 +10,8 @@ from typing import Any, Callable
 import aiohttp
 from tqdm.asyncio import tqdm
 
+from puzzle import process_connections_puzzle_data, process_crossword_puzzle_data
+
 
 # Daily Crossword Date Range: 1993/11/21 - Present
 # Mini Crossword Date Range:  2014/08/21 - Present
@@ -25,25 +27,6 @@ DEFAULT_HEADERS = {
     "content-type": "application/x-www-form-urlencoded",
     "x-games-auth-bypass": "true",  # Only necessary header for crossword requests
 }
-
-
-def process_crossword_puzzle_data(data: dict[str, Any]) -> dict[str, Any]:
-    """Remove bulky board SVG data from a crossword-style puzzle response."""
-    processed_data = data.copy()
-    body = processed_data.get("body")
-    if isinstance(body, list):
-        processed_data["body"] = [
-            {key: value for key, value in puzzle.items() if key != "board"}
-            if isinstance(puzzle, dict)
-            else puzzle
-            for puzzle in body
-        ]
-    return processed_data
-
-
-def process_connections_puzzle_data(data: dict[str, Any]) -> dict[str, Any]:
-    """Return Connections puzzle data unchanged."""
-    return data
 
 
 @dataclass(frozen=True)

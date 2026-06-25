@@ -2,8 +2,10 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
+import aiohttp
 import download
 
 
@@ -61,14 +63,19 @@ class DownloadPuzzleTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+        cached_data_session = cast(aiohttp.ClientSession, object())
+
         with patch.object(download, "PUZZLE_DATA_DIR", self.puzzle_data_dir):
             output_path = await download.download_puzzle(
-                None,
+                cached_data_session,
                 download.MINI,
                 self.puzzle_date,
                 original_data_dir=self.original_data_dir,
             )
 
+        self.assertIsNotNone(output_path)
+        if output_path is None:
+            return
         self.assertEqual(output_path, self.puzzle_data_dir / "mini" / "2014-08-21.json")
         self.assertTrue(output_path.is_file())
 
