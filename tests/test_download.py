@@ -7,7 +7,8 @@ from xml.etree import ElementTree
 
 import aiohttp
 import download
-from puzzle import Puzzle, generate_svg_json_from_puzzle_data, json_svg_to_svg, svg_to_json_svg
+from puzzle import Puzzle
+from svg import generate_svg_json_from_puzzle_data, json_svg_to_svg, svg_to_json_svg
 
 
 FIXTURE_ROOT = Path(__file__).parent
