@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import aiohttp
 from tqdm.asyncio import tqdm
@@ -16,7 +16,7 @@ from tqdm.asyncio import tqdm
 # Connections Date Range:     2023/06/12 - Present
 # Midi Crossword Date Range:  2026/02/25 - Present
 
-PUZZLE_DATA_DIR = Path("puzzle_data_test_2")
+PUZZLE_DATA_DIR = Path("puzzle_data")
 MAX_CONCURRENT_DOWNLOADS = 20
 
 DEFAULT_HEADERS = {
@@ -25,6 +25,25 @@ DEFAULT_HEADERS = {
     "content-type": "application/x-www-form-urlencoded",
     "x-games-auth-bypass": "true",  # Only necessary header for crossword requests
 }
+
+
+def process_crossword_puzzle_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Remove bulky board SVG data from a crossword-style puzzle response."""
+    processed_data = data.copy()
+    body = processed_data.get("body")
+    if isinstance(body, list):
+        processed_data["body"] = [
+            {key: value for key, value in puzzle.items() if key != "board"}
+            if isinstance(puzzle, dict)
+            else puzzle
+            for puzzle in body
+        ]
+    return processed_data
+
+
+def process_connections_puzzle_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Return Connections puzzle data unchanged."""
+    return data
 
 
 @dataclass(frozen=True)
@@ -36,6 +55,7 @@ class PuzzleConfig:
     directory: str
     start_date: date
     json_url_template: str
+    process_data: Callable[[dict[str, Any]], dict[str, Any]]
     requires_cookies: bool = False
     default_headers: dict[str, str] | None = None
 
@@ -45,6 +65,9 @@ class PuzzleConfig:
     def output_path(self, puzzle_date: date) -> Path:
         return PUZZLE_DATA_DIR / self.directory / f"{puzzle_date.isoformat()}.json"
 
+    def original_path(self, puzzle_date: date, original_data_dir: Path) -> Path:
+        return original_data_dir / self.directory / f"{puzzle_date.isoformat()}.json"
+
 
 CONNECTIONS = PuzzleConfig(
     key="connections",
@@ -52,6 +75,7 @@ CONNECTIONS = PuzzleConfig(
     directory="connections",
     start_date=date(2023, 6, 12),
     json_url_template="https://www.nytimes.com/svc/connections/v2/{date}.json",
+    process_data=process_connections_puzzle_data,
 )
 
 MINI = PuzzleConfig(
@@ -60,6 +84,7 @@ MINI = PuzzleConfig(
     directory="mini",
     start_date=date(2014, 8, 21),
     json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/mini/{date}.json",
+    process_data=process_crossword_puzzle_data,
     requires_cookies=True,
     default_headers=DEFAULT_HEADERS,
 )
@@ -70,6 +95,7 @@ CROSSWORD = PuzzleConfig(
     directory="crossword",
     start_date=date(1993, 11, 21),
     json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/daily/{date}.json",
+    process_data=process_crossword_puzzle_data,
     requires_cookies=True,
     default_headers=DEFAULT_HEADERS,
 )
@@ -80,6 +106,7 @@ MIDI = PuzzleConfig(
     directory="midi",
     start_date=date(2026, 2, 25),
     json_url_template="https://www.nytimes.com/svc/crosswords/v6/puzzle/midi/{date}.json",
+    process_data=process_crossword_puzzle_data,
     requires_cookies=True,
     default_headers=DEFAULT_HEADERS,
 )
@@ -105,6 +132,11 @@ def save_json(path: Path, data: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=4), encoding="utf-8")
     return path
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    """Load JSON data from a file."""
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 async def get_page_cookies(session: aiohttp.ClientSession, url: str) -> dict[str, str]:
@@ -140,6 +172,7 @@ async def download_puzzle(
     config: PuzzleConfig,
     puzzle_date: date,
     *,
+    original_data_dir: Path | None = None,
     cookies: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
 ) -> Path | None:
@@ -148,30 +181,46 @@ async def download_puzzle(
     if output_path.is_file():
         return None
 
-    request_headers = headers if headers is not None else config.default_headers
-    request_cookies = cookies
+    original_path = (
+        config.original_path(puzzle_date, original_data_dir)
+        if original_data_dir is not None
+        else None
+    )
 
-    if config.requires_cookies and request_cookies is None:
-        request_cookies = await get_mini_cookies(session)
+    if original_path is not None and original_path.is_file():
+        # Original puzzle data found
+        data = load_json(original_path)
+    else:
+        request_headers = headers if headers is not None else config.default_headers
+        request_cookies = cookies
 
-    try:
-        data = await fetch_json(
-            session,
-            config.json_url(puzzle_date),
-            headers=request_headers,
-            cookies=request_cookies,
-        )
-    except aiohttp.ClientResponseError as error:
-        print(f"Failed to fetch {config.name} for {puzzle_date}: {error}")
-        return None
+        if config.requires_cookies and request_cookies is None:
+            request_cookies = await get_mini_cookies(session)
 
-    return save_json(output_path, data)
+        try:
+            data = await fetch_json(
+                session,
+                config.json_url(puzzle_date),
+                headers=request_headers,
+                cookies=request_cookies,
+            )
+        except aiohttp.ClientResponseError as error:
+            print(f"Failed to fetch {config.name} for {puzzle_date}: {error}")
+            return None
+
+        if original_path is not None:
+            # If original puzzle data path is set, save the OPD there
+            save_json(original_path, data)
+
+    return save_json(output_path, config.process_data(data))
 
 
 async def download_puzzle_range(
     config: PuzzleConfig,
     start_date: date,
     end_date: date,
+    *,
+    original_data_dir: Path | None = None,
 ) -> None:
     """Download a puzzle type for every date in the inclusive range."""
     async with aiohttp.ClientSession() as session:
@@ -183,7 +232,13 @@ async def download_puzzle_range(
 
         async def download_with_limit(puzzle_date: date) -> Path | None:
             async with semaphore:
-                return await download_puzzle(session, config, puzzle_date, cookies=cookies)
+                return await download_puzzle(
+                    session,
+                    config,
+                    puzzle_date,
+                    original_data_dir=original_data_dir,
+                    cookies=cookies,
+                )
 
         tasks = [
             download_with_limit(puzzle_date)
@@ -205,7 +260,10 @@ def parse_date(value: str) -> date:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Download NYT puzzle JSON files.",
-        usage="download.py [mini/midi/crossword/connections] [date YYYY-MM-DD]",
+        usage=(
+            "download.py [--original-puzzle-data-dir PATH] "
+            "[mini/midi/crossword/connections] [date YYYY-MM-DD]"
+        ),
     )
     parser.add_argument(
         "puzzle_type",
@@ -218,6 +276,14 @@ def parse_args() -> argparse.Namespace:
         nargs="?",
         type=parse_date,
         help="Start date in YYYY-MM-DD format. Requires a puzzle type.",
+    )
+    parser.add_argument(
+        "--original-puzzle-data-dir",
+        type=Path,
+        help=(
+            "Optional directory containing raw downloaded puzzle JSON. "
+            "Files found here are used as a cache; newly fetched raw files are also saved here."
+        ),
     )
 
     args = parser.parse_args()
@@ -272,7 +338,12 @@ async def main() -> None:
 
     for config, start_date in download_plan(args):
         print(f"Downloading {config.name} from {start_date} to {end_date}")
-        await download_puzzle_range(config, start_date, end_date)
+        await download_puzzle_range(
+            config,
+            start_date,
+            end_date,
+            original_data_dir=args.original_puzzle_data_dir,
+        )
 
 if __name__ == "__main__":
     start_time = time.perf_counter()
