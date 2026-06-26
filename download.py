@@ -110,7 +110,7 @@ def iter_dates(start_date: date, end_date: date):
 def save_json(path: Path, data: dict[str, Any]) -> Path:
     """Save JSON data to a file and return the path."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    path.write_text(json.dumps(data), encoding="utf-8")
     return path
 
 

@@ -6,6 +6,7 @@ from typing import Optional
 
 
 Direction = str  # "Across" or "Down"
+CROSSWORD_BODY_FIELDS = ("cells", "clueLists", "clues", "dimensions")
 
 
 @dataclass(frozen=True)
@@ -110,12 +111,12 @@ class Puzzle:
 
 
 def process_crossword_puzzle_data(data: dict[str, Any]) -> dict[str, Any]:
-    """Remove bulky board SVG data from a crossword-style puzzle response."""
+    """Keep only puzzle fields needed to load crossword-style puzzle data."""
     processed_data = data.copy()
     body = processed_data.get("body")
     if isinstance(body, list):
         processed_data["body"] = [
-            {key: value for key, value in puzzle.items() if key != "board"}
+            {key: puzzle[key] for key in CROSSWORD_BODY_FIELDS if key in puzzle}
             if isinstance(puzzle, dict)
             else puzzle
             for puzzle in body

@@ -20,25 +20,35 @@ def crossword_fixture_paths() -> list[Path]:
     return [
         path
         for puzzle_type in ("mini", "midi", "crossword")
-        for path in sorted((CROSSWORD_FIXTURE_ROOT / puzzle_type).glob("*3.json"))
+        for path in sorted((CROSSWORD_FIXTURE_ROOT / puzzle_type).glob("*01.json"))
     ]
 
 
 class PuzzleDataProcessingTests(unittest.TestCase):
     def test_removes_board_from_crossword_style_body_without_mutating_raw_data(self) -> None:
         raw_data = {
+            "publicationDate": "2026-06-23",
+            "subcategory": "mini",
             "body": [
                 {
                     "board": "<svg>large board</svg>",
                     "cells": [{"answer": "A"}],
+                    "clueLists": [{"name": "Across", "clues": []}],
                     "clues": [],
+                    "dimensions": {"width": 1, "height": 1},
+                    "SVG": {"name": "svg"},
                 }
             ]
         }
 
         processed_data = download.MINI.process_data(raw_data)
 
-        self.assertNotIn("board", processed_data["body"][0])
+        self.assertEqual(processed_data["publicationDate"], "2026-06-23")
+        self.assertEqual(processed_data["subcategory"], "mini")
+        self.assertEqual(
+            set(processed_data["body"][0]),
+            {"cells", "clueLists", "clues", "dimensions"},
+        )
         self.assertEqual(processed_data["body"][0]["cells"], [{"answer": "A"}])
         self.assertEqual(raw_data["body"][0]["board"], "<svg>large board</svg>")
 
