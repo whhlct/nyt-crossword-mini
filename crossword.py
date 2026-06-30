@@ -828,25 +828,35 @@ class GameScreen(Screen):
         if clue is None:
             return
 
-        cells = self.entry_advance_cells(clue)
-        start_pos = cells.index(self.selected_index)
+        targets = self.entry_advance_targets(clue)
+        start_pos = targets.index((clue.direction, self.selected_index))
 
-        for offset in range(1, len(cells)):
-            next_index = cells[(start_pos + offset) % len(cells)]
+        for offset in range(1, len(targets)):
+            next_direction, next_index = targets[(start_pos + offset) % len(targets)]
             if self.correctness[next_index] is not True:
+                self.direction = next_direction
                 self.selected_index = next_index
                 return
 
-    def entry_advance_cells(self, clue: Clue) -> list[int]:
-        clue_ids = self.puzzle.clue_ids_for_direction(self.direction)
+    def entry_advance_targets(self, clue: Clue) -> list[tuple[Direction, int]]:
+        clue_ids = self.puzzle.clue_ids_for_direction(clue.direction)
         if not clue_ids:
-            return list(clue.cells)
+            return [(clue.direction, cell_index) for cell_index in clue.cells]
 
         current_pos = clue_ids.index(clue.index)
-        ordered_clue_ids = clue_ids[current_pos:] + clue_ids[:current_pos]
+        other_direction = "Down" if clue.direction == "Across" else "Across"
+        ordered_clues = (
+            [(clue.direction, clue_id) for clue_id in clue_ids[current_pos:]]
+            + [
+                (other_direction, clue_id)
+                for clue_id in self.puzzle.clue_ids_for_direction(other_direction)
+            ]
+            + [(clue.direction, clue_id) for clue_id in clue_ids[:current_pos]]
+        )
+
         return [
-            cell_index
-            for clue_id in ordered_clue_ids
+            (direction, cell_index)
+            for direction, clue_id in ordered_clues
             for cell_index in self.puzzle.clues[clue_id].cells
         ]
 

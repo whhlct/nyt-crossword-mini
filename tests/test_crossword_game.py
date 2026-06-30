@@ -70,6 +70,32 @@ class CrosswordGameTests(unittest.TestCase):
         screen.elapsed_seconds = lambda: 83 if screen.finished_elapsed is None else screen.finished_elapsed
         return screen
 
+    def make_bidirectional_screen(self) -> GameScreen:
+        puzzle = Puzzle(
+            width=2,
+            height=2,
+            cells=[
+                Cell(index=0, row=0, col=0, answer="A", label="1", clue_ids=(0, 2)),
+                Cell(index=1, row=0, col=1, answer="B", label="2", clue_ids=(0, 3)),
+                Cell(index=2, row=1, col=0, answer="C", label="3", clue_ids=(1, 2)),
+                Cell(index=3, row=1, col=1, answer="D", clue_ids=(1, 3)),
+            ],
+            clues=[
+                Clue(index=0, label="1", direction="Across", cells=(0, 1), text="Top"),
+                Clue(index=1, label="3", direction="Across", cells=(2, 3), text="Bottom"),
+                Clue(index=2, label="1", direction="Down", cells=(0, 2), text="Left"),
+                Clue(index=3, label="2", direction="Down", cells=(1, 3), text="Right"),
+            ],
+        )
+
+        screen = self.make_screen()
+        screen.puzzle = puzzle
+        screen.guesses = [""] * len(puzzle.cells)
+        screen.correctness = [None] * len(puzzle.cells)
+        screen.selected_index = 0
+        screen.direction = "Across"
+        return screen
+
     def test_entered_letter_advances_within_current_word(self) -> None:
         screen = self.make_screen()
 
@@ -137,6 +163,28 @@ class CrosswordGameTests(unittest.TestCase):
         screen.enter_letter("b")
 
         self.assertEqual(screen.selected_index, 4)
+
+    def test_entered_letter_at_end_of_last_across_moves_to_first_down(self) -> None:
+        screen = self.make_bidirectional_screen()
+        screen.selected_index = 3
+        screen.direction = "Across"
+
+        screen.enter_letter("d")
+
+        self.assertEqual(screen.direction, "Down")
+        self.assertEqual(screen.selected_index, 0)
+
+    def test_entered_letter_at_end_of_last_across_skips_checked_correct_down_cell(self) -> None:
+        screen = self.make_bidirectional_screen()
+        screen.selected_index = 3
+        screen.direction = "Across"
+        screen.guesses[0] = "A"
+        screen.correctness[0] = True
+
+        screen.enter_letter("d")
+
+        self.assertEqual(screen.direction, "Down")
+        self.assertEqual(screen.selected_index, 2)
 
     def test_filling_final_correct_letter_auto_completes_without_marking_cells(self) -> None:
         screen = self.make_screen()
