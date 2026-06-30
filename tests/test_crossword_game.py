@@ -56,6 +56,57 @@ class CrosswordGameTests(unittest.TestCase):
         self.assertEqual(screen.guesses[1], "B")
         self.assertEqual(screen.selected_index, 3)
 
+    def test_entered_letter_does_not_overwrite_checked_correct_cell(self) -> None:
+        screen = self.make_screen()
+        screen.guesses[0] = "A"
+        screen.correctness[0] = True
+
+        screen.enter_letter("z")
+
+        self.assertEqual(screen.guesses[0], "A")
+        self.assertEqual(screen.selected_index, 0)
+
+    def test_erase_does_not_clear_checked_correct_cell(self) -> None:
+        screen = self.make_screen()
+        screen.guesses[0] = "A"
+        screen.correctness[0] = True
+
+        screen.erase()
+
+        self.assertEqual(screen.guesses[0], "A")
+        self.assertTrue(screen.correctness[0])
+
+    def test_backspace_from_empty_cell_does_not_clear_previous_checked_correct_cell(self) -> None:
+        screen = self.make_screen()
+        screen.guesses[0] = "A"
+        screen.correctness[0] = True
+        screen.selected_index = 1
+
+        screen.erase()
+
+        self.assertEqual(screen.guesses[0], "A")
+        self.assertTrue(screen.correctness[0])
+        self.assertEqual(screen.selected_index, 1)
+
+    def test_entered_letter_skips_checked_correct_cell_in_current_word(self) -> None:
+        screen = self.make_screen()
+        screen.guesses[1] = "B"
+        screen.correctness[1] = True
+
+        screen.enter_letter("a")
+
+        self.assertEqual(screen.selected_index, 3)
+
+    def test_entered_letter_skips_checked_correct_cell_at_start_of_next_word(self) -> None:
+        screen = self.make_screen()
+        screen.selected_index = 1
+        screen.guesses[3] = "C"
+        screen.correctness[3] = True
+
+        screen.enter_letter("b")
+
+        self.assertEqual(screen.selected_index, 4)
+
     def test_filling_final_correct_letter_auto_completes_without_marking_cells(self) -> None:
         screen = self.make_screen()
         screen.guesses = ["A", "B", "", "C", ""]

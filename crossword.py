@@ -690,21 +690,29 @@ class GameScreen(Screen):
         self.refresh_ui("Puzzle cleared.")
 
     def enter_letter(self, letter: str) -> None:
+        if self.correctness[self.selected_index] is True:
+            self.refresh_ui()
+            return
+
         self.guesses[self.selected_index] = letter.upper()
         self.correctness[self.selected_index] = None
-        self.advance_within_current_clue()
+        self.advance_after_entry()
         if self.notify_if_newly_filled():
             return
 
         self.refresh_ui()
 
     def erase(self) -> None:
+        if self.correctness[self.selected_index] is True:
+            self.refresh_ui()
+            return
+
         if self.guesses[self.selected_index]:
             self.guesses[self.selected_index] = ""
             self.correctness[self.selected_index] = None
         else:
             previous_index = self.previous_cell_in_current_clue()
-            if previous_index is not None:
+            if previous_index is not None and self.correctness[previous_index] is not True:
                 self.selected_index = previous_index
                 self.guesses[self.selected_index] = ""
                 self.correctness[self.selected_index] = None
@@ -756,17 +764,32 @@ class GameScreen(Screen):
 
         self.refresh_ui()
 
-    def advance_within_current_clue(self) -> None:
+    def advance_after_entry(self) -> None:
         clue = self.current_clue()
         if clue is None:
             return
 
-        cells = list(clue.cells)
-        pos = cells.index(self.selected_index)
-        if pos + 1 < len(cells):
-            self.selected_index = cells[pos + 1]
-        else:
-            self.select_next_clue()
+        cells = self.entry_advance_cells(clue)
+        start_pos = cells.index(self.selected_index)
+
+        for offset in range(1, len(cells)):
+            next_index = cells[(start_pos + offset) % len(cells)]
+            if self.correctness[next_index] is not True:
+                self.selected_index = next_index
+                return
+
+    def entry_advance_cells(self, clue: Clue) -> list[int]:
+        clue_ids = self.puzzle.clue_ids_for_direction(self.direction)
+        if not clue_ids:
+            return list(clue.cells)
+
+        current_pos = clue_ids.index(clue.index)
+        ordered_clue_ids = clue_ids[current_pos:] + clue_ids[:current_pos]
+        return [
+            cell_index
+            for clue_id in ordered_clue_ids
+            for cell_index in self.puzzle.clues[clue_id].cells
+        ]
 
     def previous_cell_in_current_clue(self) -> Optional[int]:
         clue = self.current_clue()
