@@ -629,6 +629,10 @@ class GameScreen(Screen):
         self.refresh_ui()
 
     def action_next_clue(self) -> None:
+        self.select_next_clue()
+        self.refresh_ui()
+
+    def select_next_clue(self) -> None:
         current = self.current_clue()
         clue_ids = self.puzzle.clue_ids_for_direction(self.direction)
 
@@ -642,7 +646,6 @@ class GameScreen(Screen):
             next_id = clue_ids[(current_pos + 1) % len(clue_ids)]
 
         self.selected_index = self.puzzle.clues[next_id].cells[0]
-        self.refresh_ui()
 
     def action_check(self) -> None:
         filled = 0
@@ -759,6 +762,8 @@ class GameScreen(Screen):
         pos = cells.index(self.selected_index)
         if pos + 1 < len(cells):
             self.selected_index = cells[pos + 1]
+        else:
+            self.select_next_clue()
 
     def previous_cell_in_current_clue(self) -> Optional[int]:
         clue = self.current_clue()
