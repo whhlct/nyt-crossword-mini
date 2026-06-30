@@ -34,6 +34,7 @@ Controls:
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -545,6 +546,12 @@ class GameScreen(Screen):
         height: 3;
         padding: 0 2;
     }
+
+    #timer {
+        height: 1;
+        padding: 0 2;
+        text-style: bold;
+    }
     """
 
     BINDINGS = [
@@ -567,6 +574,8 @@ class GameScreen(Screen):
         self.correctness: list[Optional[bool]] = [None] * len(self.puzzle.cells)
         self.selected_index = self.puzzle.first_open_cell()
         self.direction: Direction = "Across"
+        self.started_at = time.monotonic()
+        self.finished_elapsed: Optional[int] = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -581,11 +590,13 @@ class GameScreen(Screen):
                     yield ClueList(self.puzzle, "Across", id="across-clues")
                     yield ClueList(self.puzzle, "Down", id="down-clues")
 
+        yield Static(id="timer")
         yield Static(id="status")
         yield Footer()
 
     def on_mount(self) -> None:
         self.fit_board_scroll_width()
+        self.set_interval(1, self.refresh_timer)
         self.refresh_ui(
             f"Loaded {self.puzzle_path.stem}. Type letters to solve. "
             "Use Tab/Space to switch direction."
@@ -648,26 +659,12 @@ class GameScreen(Screen):
         self.selected_index = self.puzzle.clues[next_id].cells[0]
 
     def action_check(self) -> None:
-        filled = 0
-        wrong = 0
-
-        for i, cell in enumerate(self.puzzle.cells):
-            if cell.is_block:
-                continue
-
-            if not self.guesses[i]:
-                self.correctness[i] = None
-                continue
-
-            filled += 1
-            is_correct = self.guesses[i].upper() == cell.answer
-            self.correctness[i] = is_correct
-            wrong += int(not is_correct)
+        filled, total, wrong = self.check_filled_answers()
 
         if filled == 0:
             self.refresh_ui("Nothing to check yet.")
-        elif wrong == 0 and self.is_complete():
-            self.refresh_ui("Solved! Everything is correct.")
+        elif wrong == 0 and filled == total:
+            self.mark_completed()
         elif wrong == 0:
             self.refresh_ui("All filled letters are correct so far.")
         else:
@@ -687,13 +684,16 @@ class GameScreen(Screen):
         self.correctness = [None] * len(self.puzzle.cells)
         self.selected_index = self.puzzle.first_open_cell()
         self.direction = "Across"
+        self.started_at = time.monotonic()
+        self.finished_elapsed = None
         self.refresh_ui("Puzzle cleared.")
 
     def enter_letter(self, letter: str) -> None:
         self.guesses[self.selected_index] = letter.upper()
         self.correctness[self.selected_index] = None
         self.advance_within_current_clue()
-        self.refresh_ui()
+        if not self.check_if_filled():
+            self.refresh_ui()
 
     def erase(self) -> None:
         if self.guesses[self.selected_index]:
@@ -797,6 +797,72 @@ class GameScreen(Screen):
                 return False
         return True
 
+    def check_filled_answers(self) -> tuple[int, int, int]:
+        filled = 0
+        wrong = 0
+        total = 0
+
+        for i, cell in enumerate(self.puzzle.cells):
+            if cell.is_block:
+                continue
+
+            total += 1
+            if not self.guesses[i]:
+                self.correctness[i] = None
+                continue
+
+            filled += 1
+            is_correct = self.guesses[i].upper() == cell.answer
+            self.correctness[i] = is_correct
+            wrong += int(not is_correct)
+
+        return filled, total, wrong
+
+    def check_if_filled(self) -> bool:
+        filled, total, wrong = self.check_filled_answers()
+        if filled < total:
+            return False
+
+        if wrong == 0:
+            self.mark_completed()
+        else:
+            suffix = "s" if wrong != 1 else ""
+            self.refresh_ui(f"All letters are filled, but {wrong} letter{suffix} incorrect.")
+
+        return True
+
+    def mark_completed(self) -> None:
+        newly_completed = self.finished_elapsed is None
+        if self.finished_elapsed is None:
+            self.finished_elapsed = self.elapsed_seconds()
+
+        elapsed = self.format_elapsed(self.finished_elapsed)
+        message = f"Puzzle completed in {elapsed}!"
+        if newly_completed:
+            self.show_completion_message(message)
+        self.refresh_ui(message)
+
+    def show_completion_message(self, message: str) -> None:
+        try:
+            self.app.notify(message, title="Puzzle complete", timeout=10)
+        except Exception:
+            return
+
+    def elapsed_seconds(self) -> int:
+        if self.finished_elapsed is not None:
+            return self.finished_elapsed
+        return int(time.monotonic() - self.started_at)
+
+    @staticmethod
+    def format_elapsed(seconds: int) -> str:
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+        return f"{minutes}:{seconds:02d}"
+
     def refresh_ui(self, status: str = "") -> None:
         clue = self.current_clue()
 
@@ -811,8 +877,12 @@ class GameScreen(Screen):
         self.query_one("#current", Static).update(self.current_clue_text(clue))
         self.query_one("#across-clues", ClueList).set_active_clue(clue)
         self.query_one("#down-clues", ClueList).set_active_clue(clue)
+        self.refresh_timer()
         self.query_one("#status", Static).update(status or self.progress_text())
         self.scroll_selected_cell_visible()
+
+    def refresh_timer(self) -> None:
+        self.query_one("#timer", Static).update(f"Time: {self.format_elapsed(self.elapsed_seconds())}")
 
     def scroll_selected_cell_visible(self) -> None:
         board = self.query_one("#board", CrosswordBoard)
