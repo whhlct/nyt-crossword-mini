@@ -97,15 +97,6 @@ class CrosswordCell(Static):
         text-style: bold;
     }
 
-    CrosswordCell.correct {
-        background: palegreen;
-        color: black;
-    }
-
-    CrosswordCell.incorrect {
-        background: red;
-        color: white;
-    }
     """
 
     def __init__(self, cell: Cell) -> None:
@@ -164,7 +155,15 @@ class CrosswordCell(Static):
         content = Text()
         content.append(f"{label:<7}\n", style="dim")
         content.append(f"{guess:^7}\n", style="bold")
-        content.append(" " * 7)
+        content.append(" " * 5)
+
+        if self.correct is True:
+            content.append("  ", style="on green")
+        elif self.correct is False:
+            content.append("  ", style="on red")
+        else:
+            content.append("  ")
+
         self.update(content)
 
 
@@ -576,6 +575,7 @@ class GameScreen(Screen):
         self.direction: Direction = "Across"
         self.started_at = time.monotonic()
         self.finished_elapsed: Optional[int] = None
+        self.checked_when_filled = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -686,14 +686,17 @@ class GameScreen(Screen):
         self.direction = "Across"
         self.started_at = time.monotonic()
         self.finished_elapsed = None
+        self.checked_when_filled = False
         self.refresh_ui("Puzzle cleared.")
 
     def enter_letter(self, letter: str) -> None:
         self.guesses[self.selected_index] = letter.upper()
         self.correctness[self.selected_index] = None
         self.advance_within_current_clue()
-        if not self.check_if_filled():
-            self.refresh_ui()
+        if self.notify_if_newly_filled():
+            return
+
+        self.refresh_ui()
 
     def erase(self) -> None:
         if self.guesses[self.selected_index]:
@@ -797,6 +800,29 @@ class GameScreen(Screen):
                 return False
         return True
 
+    def is_filled(self) -> bool:
+        for i, cell in enumerate(self.puzzle.cells):
+            if not cell.is_block and not self.guesses[i]:
+                return False
+        return True
+
+    def notify_if_newly_filled(self) -> bool:
+        if not self.is_filled():
+            return False
+
+        if self.is_complete():
+            self.checked_when_filled = True
+            self.mark_completed()
+        elif not self.checked_when_filled:
+            self.checked_when_filled = True
+            message = "Some letters are incorrect."
+            self.show_incorrect_completion_message(message)
+            self.refresh_ui(message)
+        else:
+            return False
+
+        return True
+
     def check_filled_answers(self) -> tuple[int, int, int]:
         filled = 0
         wrong = 0
@@ -818,19 +844,6 @@ class GameScreen(Screen):
 
         return filled, total, wrong
 
-    def check_if_filled(self) -> bool:
-        filled, total, wrong = self.check_filled_answers()
-        if filled < total:
-            return False
-
-        if wrong == 0:
-            self.mark_completed()
-        else:
-            suffix = "s" if wrong != 1 else ""
-            self.refresh_ui(f"All letters are filled, but {wrong} letter{suffix} incorrect.")
-
-        return True
-
     def mark_completed(self) -> None:
         newly_completed = self.finished_elapsed is None
         if self.finished_elapsed is None:
@@ -845,6 +858,12 @@ class GameScreen(Screen):
     def show_completion_message(self, message: str) -> None:
         try:
             self.app.notify(message, title="Puzzle complete", timeout=10)
+        except Exception:
+            return
+
+    def show_incorrect_completion_message(self, message: str) -> None:
+        try:
+            self.app.notify(message, title="Puzzle filled", timeout=10, severity="warning")
         except Exception:
             return
 
