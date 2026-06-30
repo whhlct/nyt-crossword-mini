@@ -14,7 +14,7 @@ from crossword import GameScreen, PuzzleMenuScreen
 class GameMenuScreen(Screen):
     """Start screen that lets the user choose a game."""
 
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [("ctrl+q", "quit", "Quit")]
 
     GAME_CHOICES = (
         ("mini", "Mini"),
@@ -36,7 +36,7 @@ class GameMenuScreen(Screen):
                 ],
                 id="game-list",
             )
-            yield Static("Enter selects. Q quits.", id="game-help")
+            yield Static("Enter selects. Ctrl+Q quits.", id="game-help")
 
         yield Footer()
 
@@ -61,7 +61,7 @@ class ConnectionsPlaceholderScreen(Screen):
 
     BINDINGS = [
         ("escape", "back", "Back"),
-        ("q", "quit", "Quit"),
+        ("ctrl+q", "quit", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -70,7 +70,7 @@ class ConnectionsPlaceholderScreen(Screen):
         with Vertical(id="game-menu"):
             yield Static("Connections", id="game-title")
             yield Static("Connections is not implemented yet.", id="game-subtitle")
-            yield Static("Esc returns to game selection. Q quits.", id="game-help")
+            yield Static("Esc returns to game selection. Ctrl+Q quits.", id="game-help")
 
         yield Footer()
 

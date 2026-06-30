@@ -28,7 +28,7 @@ Controls:
     F2               Check filled answers
     F3               Reveal puzzle
     F4               Clear puzzle
-    Q                Quit
+    Ctrl+Q           Quit
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from progress_store import PuzzleProgress, PuzzleProgressStore, default_progress_store
 from puzzle import Cell, Clue, Direction, Puzzle
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -66,6 +67,16 @@ def validate_crossword_puzzle_type(puzzle_type: str) -> CrosswordPuzzleType:
 
 def puzzle_dir_for_type(puzzle_type: str) -> Path:
     return PUZZLE_DATA_ROOT / validate_crossword_puzzle_type(puzzle_type)
+
+
+def format_elapsed(seconds: int) -> str:
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+    return f"{minutes}:{seconds:02d}"
 
 
 class CrosswordCell(Static):
@@ -313,7 +324,7 @@ class PuzzleMenuScreen(Screen):
     PAGE_SIZE = 30
 
     BINDINGS = [
-        ("q", "quit", "Quit"),
+        ("ctrl+q", "quit", "Quit"),
         ("escape", "back", "Back"),
         ("right", "next_page", "Next page"),
         ("left", "previous_page", "Previous page"),
@@ -324,9 +335,14 @@ class PuzzleMenuScreen(Screen):
         ("r", "reload", "Reload"),
     ]
 
-    def __init__(self, puzzle_type: str) -> None:
+    def __init__(
+        self,
+        puzzle_type: str,
+        progress_store: PuzzleProgressStore | None = None,
+    ) -> None:
         super().__init__()
         self.puzzle_type = validate_crossword_puzzle_type(puzzle_type)
+        self.progress_store = progress_store or default_progress_store
         self.puzzle_dir = puzzle_dir_for_type(self.puzzle_type)
         self.puzzle_files: list[Path] = []
         self.page = 0
@@ -356,6 +372,10 @@ class PuzzleMenuScreen(Screen):
     def on_mount(self) -> None:
         self.reload_puzzles()
 
+    def on_screen_resume(self) -> None:
+        if self.puzzle_files:
+            self.render_current_page()
+
     def reload_puzzles(self) -> None:
         self.puzzle_files = find_puzzle_files(self.puzzle_dir)
         self.page = min(self.page, self.page_count - 1)
@@ -380,6 +400,7 @@ class PuzzleMenuScreen(Screen):
         start = self.page * self.PAGE_SIZE
         end = min(start + self.PAGE_SIZE, len(self.puzzle_files))
         visible_files = self.puzzle_files[start:end]
+        progress_by_date = self.progress_for_files(visible_files)
 
         page_label.update(
             f"Showing {start + 1}-{end} of {len(self.puzzle_files)} "
@@ -387,7 +408,7 @@ class PuzzleMenuScreen(Screen):
         )
 
         for puzzle_path in visible_files:
-            list_view.append(ListItem(Label(puzzle_path.stem)))
+            list_view.append(ListItem(Label(self.puzzle_label(puzzle_path, progress_by_date))))
 
         if visible_files:
             list_view.index = 0
@@ -402,7 +423,7 @@ class PuzzleMenuScreen(Screen):
             return
 
         puzzle_path = self.puzzle_files[puzzle_index]
-        self.app.push_screen(GameScreen(puzzle_path, self.puzzle_type))
+        self.app.push_screen(GameScreen(puzzle_path, self.puzzle_type, self.progress_store))
 
     def action_next_page(self) -> None:
         if self.page + 1 < self.page_count:
@@ -427,6 +448,26 @@ class PuzzleMenuScreen(Screen):
 
     def action_reload(self) -> None:
         self.reload_puzzles()
+
+    def progress_for_files(self, puzzle_files: list[Path]) -> dict[str, PuzzleProgress]:
+        puzzle_dates = [path.stem for path in puzzle_files]
+        return self.progress_store.get_many(self.puzzle_type, puzzle_dates)
+
+    def puzzle_label(
+        self,
+        puzzle_path: Path,
+        progress_by_date: dict[str, PuzzleProgress],
+    ) -> str:
+        puzzle_date = puzzle_path.stem
+        progress = progress_by_date.get(puzzle_date)
+        if progress is None:
+            return puzzle_date
+
+        if progress.completed:
+            elapsed = progress.completed_seconds or progress.elapsed_seconds
+            return f"{puzzle_date}  [Completed {format_elapsed(elapsed)}]"
+
+        return f"{puzzle_date}  [In progress {format_elapsed(progress.elapsed_seconds)}]"
 
     def action_back(self) -> None:
         if len(self.app.screen_stack) > 1:
@@ -554,7 +595,7 @@ class GameScreen(Screen):
     """
 
     BINDINGS = [
-        ("q", "quit", "Quit"),
+        ("ctrl+q", "quit", "Quit"),
         ("escape", "menu", "Menu"),
         ("tab", "toggle_direction", "Toggle"),
         ("space", "toggle_direction", "Toggle"),
@@ -564,10 +605,17 @@ class GameScreen(Screen):
         ("f4", "clear", "Clear"),
     ]
 
-    def __init__(self, puzzle_path: str | Path, puzzle_type: str) -> None:
+    def __init__(
+        self,
+        puzzle_path: str | Path,
+        puzzle_type: str,
+        progress_store: PuzzleProgressStore | None = None,
+    ) -> None:
         super().__init__()
         self.puzzle_type = validate_crossword_puzzle_type(puzzle_type)
         self.puzzle_path = Path(puzzle_path)
+        self.puzzle_date = self.puzzle_path.stem
+        self.progress_store = progress_store or default_progress_store
         self.puzzle = Puzzle.from_json_file(self.puzzle_path)
         self.guesses = [""] * len(self.puzzle.cells)
         self.correctness: list[Optional[bool]] = [None] * len(self.puzzle.cells)
@@ -576,6 +624,7 @@ class GameScreen(Screen):
         self.started_at = time.monotonic()
         self.finished_elapsed: Optional[int] = None
         self.checked_when_filled = False
+        self.restore_progress()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -602,6 +651,9 @@ class GameScreen(Screen):
             "Use Tab/Space to switch direction."
         )
 
+    def on_unmount(self) -> None:
+        self.save_progress()
+
     def fit_board_scroll_width(self) -> None:
         board_width = CrosswordBoard.rendered_width(self.puzzle)
         if board_width <= 60:
@@ -626,12 +678,18 @@ class GameScreen(Screen):
             return
 
     def action_menu(self) -> None:
+        self.save_progress()
+
         # If this game was opened from the menu, return to it. If the app was
         # started with a direct file path, switch to a fresh menu.
         if len(self.app.screen_stack) > 1:
             self.app.pop_screen()
         else:
             self.app.switch_screen(PuzzleMenuScreen(self.puzzle_type))
+
+    def action_quit(self) -> None:
+        self.save_progress()
+        self.app.exit()
 
     def action_toggle_direction(self) -> None:
         other = "Down" if self.direction == "Across" else "Across"
@@ -687,6 +745,7 @@ class GameScreen(Screen):
         self.started_at = time.monotonic()
         self.finished_elapsed = None
         self.checked_when_filled = False
+        self.save_progress()
         self.refresh_ui("Puzzle cleared.")
 
     def enter_letter(self, letter: str) -> None:
@@ -876,7 +935,50 @@ class GameScreen(Screen):
         message = f"Puzzle completed in {elapsed}!"
         if newly_completed:
             self.show_completion_message(message)
+        self.save_progress()
         self.refresh_ui(message)
+
+    def restore_progress(self) -> None:
+        progress = self.progress_store.get(self.puzzle_type, self.puzzle_date)
+        if progress is None:
+            return
+
+        if len(progress.guesses) != len(self.puzzle.cells):
+            return
+
+        if len(progress.correctness) != len(self.puzzle.cells):
+            return
+
+        self.guesses = progress.guesses.copy()
+        self.correctness = progress.correctness.copy()
+
+        elapsed = max(0, int(progress.completed_seconds or progress.elapsed_seconds))
+        if progress.completed:
+            self.finished_elapsed = elapsed
+        else:
+            self.started_at = time.monotonic() - elapsed
+
+        self.checked_when_filled = self.is_filled()
+
+    def save_progress(self) -> None:
+        has_guesses = any(self.guesses)
+        completed = self.finished_elapsed is not None
+
+        if not has_guesses and not completed:
+            self.progress_store.delete(self.puzzle_type, self.puzzle_date)
+            return
+
+        self.progress_store.save(
+            PuzzleProgress(
+                puzzle_type=self.puzzle_type,
+                puzzle_date=self.puzzle_date,
+                guesses=self.guesses.copy(),
+                correctness=self.correctness.copy(),
+                elapsed_seconds=self.elapsed_seconds(),
+                completed=completed,
+                completed_seconds=self.finished_elapsed,
+            )
+        )
 
     def show_completion_message(self, message: str) -> None:
         try:

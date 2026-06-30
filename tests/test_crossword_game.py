@@ -1,7 +1,35 @@
 import unittest
+from pathlib import Path
 
-from crossword import GameScreen
+from crossword import GameScreen, PuzzleMenuScreen
+from progress_store import PuzzleProgress
 from puzzle import Cell, Clue, Puzzle
+
+
+class FakeProgressStore:
+    def __init__(self) -> None:
+        self.progress: PuzzleProgress | None = None
+        self.deleted: tuple[str, str] | None = None
+
+    def get(self, puzzle_type: str, puzzle_date: str) -> PuzzleProgress | None:
+        return self.progress
+
+    def get_many(
+        self,
+        puzzle_type: str,
+        puzzle_dates: list[str],
+    ) -> dict[str, PuzzleProgress]:
+        if self.progress is None or self.progress.puzzle_date not in puzzle_dates:
+            return {}
+
+        return {self.progress.puzzle_date: self.progress}
+
+    def save(self, progress: PuzzleProgress) -> None:
+        self.progress = progress
+
+    def delete(self, puzzle_type: str, puzzle_date: str) -> None:
+        self.deleted = (puzzle_type, puzzle_date)
+        self.progress = None
 
 
 class CrosswordGameTests(unittest.TestCase):
@@ -23,6 +51,9 @@ class CrosswordGameTests(unittest.TestCase):
         )
 
         screen = GameScreen.__new__(GameScreen)
+        screen.puzzle_type = "mini"
+        screen.puzzle_date = "2026-06-30"
+        screen.progress_store = FakeProgressStore()
         screen.puzzle = puzzle
         screen.guesses = [""] * len(puzzle.cells)
         screen.correctness = [None] * len(puzzle.cells)
@@ -178,6 +209,109 @@ class CrosswordGameTests(unittest.TestCase):
         self.assertEqual(screen.statuses[-1], "1 filled letter incorrect.")
         self.assertEqual(screen.notifications, [])
         self.assertFalse(screen.correctness[4])
+
+    def test_save_progress_persists_guesses_correctness_and_elapsed_time(self) -> None:
+        screen = self.make_screen()
+        screen.guesses = ["A", "", "", "C", ""]
+        screen.correctness = [True, None, None, False, None]
+
+        screen.save_progress()
+
+        progress = screen.progress_store.progress
+        self.assertIsNotNone(progress)
+        self.assertEqual(progress.puzzle_type, "mini")
+        self.assertEqual(progress.puzzle_date, "2026-06-30")
+        self.assertEqual(progress.guesses, ["A", "", "", "C", ""])
+        self.assertEqual(progress.correctness, [True, None, None, False, None])
+        self.assertEqual(progress.elapsed_seconds, 83)
+        self.assertFalse(progress.completed)
+
+    def test_save_progress_persists_completion_status_and_time(self) -> None:
+        screen = self.make_screen()
+        screen.guesses = ["A", "B", "", "C", "D"]
+        screen.finished_elapsed = 42
+
+        screen.save_progress()
+
+        progress = screen.progress_store.progress
+        self.assertIsNotNone(progress)
+        self.assertTrue(progress.completed)
+        self.assertEqual(progress.completed_seconds, 42)
+        self.assertEqual(progress.elapsed_seconds, 42)
+
+    def test_save_progress_deletes_empty_unsolved_progress(self) -> None:
+        screen = self.make_screen()
+
+        screen.save_progress()
+
+        self.assertEqual(screen.progress_store.deleted, ("mini", "2026-06-30"))
+
+    def test_restore_progress_loads_guesses_correctness_and_elapsed_time(self) -> None:
+        screen = self.make_screen()
+        screen.progress_store.progress = PuzzleProgress(
+            puzzle_type="mini",
+            puzzle_date="2026-06-30",
+            guesses=["A", "", "", "C", ""],
+            correctness=[True, None, None, False, None],
+            elapsed_seconds=12,
+        )
+
+        screen.restore_progress()
+
+        self.assertEqual(screen.guesses, ["A", "", "", "C", ""])
+        self.assertEqual(screen.correctness, [True, None, None, False, None])
+        self.assertIsNone(screen.finished_elapsed)
+
+    def test_restore_completed_progress_loads_completion_time(self) -> None:
+        screen = self.make_screen()
+        screen.progress_store.progress = PuzzleProgress(
+            puzzle_type="mini",
+            puzzle_date="2026-06-30",
+            guesses=["A", "B", "", "C", "D"],
+            correctness=[True, True, None, True, True],
+            elapsed_seconds=99,
+            completed=True,
+            completed_seconds=42,
+        )
+
+        screen.restore_progress()
+
+        self.assertEqual(screen.finished_elapsed, 42)
+        self.assertTrue(screen.checked_when_filled)
+
+
+class PuzzleMenuTests(unittest.TestCase):
+    def test_puzzle_label_shows_completed_time(self) -> None:
+        store = FakeProgressStore()
+        menu = PuzzleMenuScreen("mini", store)
+        progress = PuzzleProgress(
+            puzzle_type="mini",
+            puzzle_date="2026-06-30",
+            guesses=["A"],
+            correctness=[True],
+            elapsed_seconds=99,
+            completed=True,
+            completed_seconds=83,
+        )
+
+        label = menu.puzzle_label(Path("puzzle_data/mini/2026-06-30.json"), {progress.puzzle_date: progress})
+
+        self.assertEqual(label, "2026-06-30  [Completed 1:23]")
+
+    def test_puzzle_label_shows_in_progress_time(self) -> None:
+        store = FakeProgressStore()
+        menu = PuzzleMenuScreen("mini", store)
+        progress = PuzzleProgress(
+            puzzle_type="mini",
+            puzzle_date="2026-06-30",
+            guesses=["A"],
+            correctness=[None],
+            elapsed_seconds=42,
+        )
+
+        label = menu.puzzle_label(Path("puzzle_data/mini/2026-06-30.json"), {progress.puzzle_date: progress})
+
+        self.assertEqual(label, "2026-06-30  [In progress 0:42]")
 
 
 if __name__ == "__main__":
