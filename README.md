@@ -107,3 +107,32 @@ F4               Clear puzzle
 Esc              Return to the puzzle menu
 Q                Quit
 ```
+
+## Run The Browser App
+
+Start the Python API:
+
+```bash
+uv run uvicorn api:app --reload
+```
+
+In another terminal, start the React frontend:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open the Vite URL, usually `http://localhost:5173`. The browser app currently
+implements the game menu plus Mini, Midi, and Crossword play. Connections is
+shown in the menu as the placeholder for the next game screen.
+
+To serve a production build from FastAPI:
+
+```bash
+cd web
+npm run build
+cd ..
+uv run uvicorn api:app
+```

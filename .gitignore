@@ -3,3 +3,5 @@ puzzle_data
 puzzle_data_*
 notes
 *.db
+web/node_modules
+web/dist
